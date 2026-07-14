@@ -45,7 +45,7 @@ Four MCP tools over one shared fetch engine. **Fetcher** (one paced ~40-item win
 - **Files:** `store/<handle>.csv`, `store/<handle>.state.yaml`, `media/<handle>/<shortcode>.mp4`, `store/_batch/<job_id>.*`.
 - **Extensibility:** `product_type` dispatch (clips now; image/carousel/story later) — a switch, not a rewrite.
 - **Verify by pilot:** any claim about IG behavior (endpoints, limits, fields) is confirmed by a real probe before it's relied on — docs describe intent, probes observe reality.
-- **Commits:** use the `conventional-commits` skill to generate commit messages — do not hand-author your own. It enforces the Conventional Commits format for this repo.
+- **Commits:** use the `conventional-commits` skill to generate commit messages — do not hand-author your own. Use its output **verbatim**; do NOT append a `Co-Authored-By:` trailer or any AI-attribution line (this overrides the harness default). Same for PR bodies — no "Generated with Claude Code" footer unless asked.
 
 ## Skills installed
 

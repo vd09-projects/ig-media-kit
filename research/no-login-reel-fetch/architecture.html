@@ -1,0 +1,415 @@
+<title>IG Media Kit — Architecture Review</title>
+<style>
+  :root{
+    --ground:#EEF1F1;        /* cool off-white, slight teal bias */
+    --surface:#FFFFFF;
+    --surface-2:#F5F8F7;
+    --ink:#132320;           /* near-black, teal-biased */
+    --muted:#556360;         /* teal-grey */
+    --faint:#8A9793;
+    --line:#D6DEDB;
+    --teal:#0C6B5E;          /* primary: structure / plumbing */
+    --teal-soft:#DDEAE6;
+    --coral:#D8542B;         /* thesis pop: anonymous / no-login. used sparingly */
+    --coral-soft:#F7E3DB;
+    --good:#2E7D51;
+    --warn:#B0731A;
+    --bad:#B23A2E;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,"Cascadia Mono","Roboto Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--ground);color:var(--ink);
+    font-family:var(--sans);font-size:16px;line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1020px;margin:0 auto;padding:0 24px}
+  a{color:var(--teal)}
+
+  /* ---- header ---- */
+  header{
+    border-bottom:1px solid var(--line);
+    background:
+      linear-gradient(var(--ground),var(--ground)) padding-box,
+      var(--ground);
+    padding:40px 0 30px;
+  }
+  .kicker{
+    font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--teal);margin:0 0 14px;font-weight:600;
+    display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  }
+  .kicker .dot{width:6px;height:6px;border-radius:50%;background:var(--coral)}
+  h1{
+    font-family:var(--mono);font-weight:700;letter-spacing:-.02em;
+    font-size:clamp(30px,5vw,46px);line-height:1.05;margin:0 0 16px;text-wrap:balance;
+  }
+  h1 .fade{color:var(--faint)}
+  .lede{font-size:clamp(17px,2.2vw,20px);color:var(--muted);max-width:64ch;margin:0}
+  .badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+  .badge{
+    font-family:var(--mono);font-size:12px;letter-spacing:.02em;
+    padding:5px 11px;border-radius:100px;border:1px solid var(--line);
+    background:var(--surface);color:var(--muted);white-space:nowrap;
+  }
+  .badge b{color:var(--ink);font-weight:600}
+  .badge.v{background:var(--teal);color:#fff;border-color:var(--teal)}
+  .badge.pop{background:var(--coral-soft);color:#8f3417;border-color:#e9c4b7}
+
+  /* ---- section scaffolding ---- */
+  section{padding:44px 0;border-bottom:1px solid var(--line)}
+  .eyebrow{
+    font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--faint);margin:0 0 6px;font-weight:600;
+  }
+  h2{font-size:clamp(22px,3vw,28px);letter-spacing:-.01em;margin:0 0 8px;font-weight:650;text-wrap:balance}
+  .sub{color:var(--muted);margin:0 0 26px;max-width:66ch}
+
+  /* ---- stat strip ---- */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+    background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .stat{background:var(--surface);padding:18px 18px}
+  .stat .n{font-family:var(--mono);font-size:22px;font-weight:700;letter-spacing:-.01em;
+    font-variant-numeric:tabular-nums;color:var(--teal)}
+  .stat .n.coral{color:var(--coral)}
+  .stat .l{font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.4}
+
+  /* ---- tool cards ---- */
+  .tools{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .tool{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px;
+    display:flex;flex-direction:column;gap:10px;position:relative;overflow:hidden}
+  .tool::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px}
+  .tool.sync::before{background:var(--teal)}
+  .tool.async::before{background:var(--coral)}
+  .tool .top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .tool .id{font-family:var(--mono);font-weight:700;font-size:15px}
+  .tool .mode{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+    padding:3px 8px;border-radius:100px;font-weight:600}
+  .tool.sync .mode{background:var(--teal-soft);color:#0a5346}
+  .tool.async .mode{background:var(--coral-soft);color:#8f3417}
+  .tool .sig{font-family:var(--mono);font-size:12.5px;color:var(--ink);background:var(--surface-2);
+    border:1px solid var(--line);border-radius:8px;padding:9px 11px;overflow-x:auto;white-space:pre;line-height:1.5}
+  .tool .desc{font-size:13.5px;color:var(--muted);margin:0}
+
+  /* ---- diagram ---- */
+  .diagram{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:26px;
+    background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px;
+    background-position:-11px -11px}
+  .node{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    box-shadow:0 1px 0 rgba(19,35,32,.03)}
+  .node .nh{font-family:var(--mono);font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:8px}
+  .node .nb{font-size:12.5px;color:var(--muted);margin-top:5px;line-height:1.5}
+  .node .nb code{font-family:var(--mono);font-size:11.5px;background:var(--surface-2);padding:1px 5px;border-radius:5px}
+  .node.mcp{border-color:var(--teal);border-width:1.5px;background:linear-gradient(180deg,#fff,var(--surface-2))}
+  .node.store{border-color:var(--ink);border-width:1.5px}
+  .tag{width:9px;height:9px;border-radius:2px;flex:none}
+  .tag.teal{background:var(--teal)} .tag.coral{background:var(--coral)} .tag.ink{background:var(--ink)}
+
+  .arrow{display:flex;justify-content:center;color:var(--faint);font-family:var(--mono);font-size:18px;
+    line-height:1;padding:7px 0}
+  .row3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:20px;padding-top:16px;border-top:1px dashed var(--line);
+    font-size:12.5px;color:var(--muted)}
+  .legend span{display:flex;align-items:center;gap:7px}
+
+  /* ---- flow cards ---- */
+  .flows{display:grid;grid-template-columns:1fr;gap:14px}
+  .flow{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .flow .fh{display:flex;gap:12px;align-items:baseline;padding:15px 18px;border-bottom:1px solid var(--line);
+    background:var(--surface-2)}
+  .flow .fl{font-family:var(--mono);font-weight:700;font-size:13px;color:var(--teal);white-space:nowrap}
+  .flow.async .fl{color:var(--coral)}
+  .flow .ft{font-family:var(--mono);font-size:13px;font-weight:600}
+  .flow .fmeta{margin-left:auto;font-size:11.5px;color:var(--faint);font-family:var(--mono)}
+  .flow ol{margin:0;padding:14px 20px 16px 38px;display:flex;flex-direction:column;gap:7px}
+  .flow li{font-size:14px;color:var(--muted)}
+  .flow li b{color:var(--ink);font-weight:600}
+  .flow code{font-family:var(--mono);font-size:12.5px;background:var(--surface-2);padding:1px 6px;border-radius:5px;color:var(--ink)}
+
+  /* ---- data model ---- */
+  pre.tree{font-family:var(--mono);font-size:12.5px;line-height:1.7;background:var(--ink);color:#D7E3E0;
+    border-radius:12px;padding:20px 22px;overflow-x:auto;margin:0}
+  pre.tree .c{color:#7FA89F}
+  pre.tree .k{color:#E8A87C}
+
+  /* ---- decision table ---- */
+  .table-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  table{border-collapse:collapse;width:100%;min-width:560px;background:var(--surface)}
+  th,td{text-align:left;padding:12px 15px;border-bottom:1px solid var(--line);font-size:13.5px;vertical-align:top}
+  th{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600}
+  tr:last-child td{border-bottom:none}
+  td .opt{font-weight:600;color:var(--ink)}
+  .pill{font-family:var(--mono);font-size:11px;font-weight:600;padding:3px 9px;border-radius:100px;white-space:nowrap;display:inline-block}
+  .pill.no{background:#f6e0dd;color:var(--bad)}
+  .pill.yes{background:#dcefe4;color:var(--good)}
+  .pill.warn{background:#f4e7cf;color:#8a5a12}
+  .verdict-chosen td{background:var(--teal-soft)}
+  .verdict-chosen .opt{color:#0a5346}
+
+  /* ---- spikes ---- */
+  .spikes{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+  .spike{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:16px}
+  .spike .sn{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--coral);font-weight:600}
+  .spike .st{font-weight:650;margin:6px 0 6px;font-size:14.5px}
+  .spike .sd{font-size:13px;color:var(--muted);margin:0}
+  .spike .sig{font-family:var(--mono);font-size:11.5px;color:var(--teal);margin-top:9px;padding-top:9px;border-top:1px dashed var(--line)}
+
+  /* ---- footer / next ---- */
+  .next{padding:40px 0 60px}
+  .next .card{background:var(--ink);color:#E6EEEC;border-radius:16px;padding:30px 30px;
+    display:flex;gap:22px;align-items:center;flex-wrap:wrap;justify-content:space-between}
+  .next h2{color:#fff;margin:0 0 6px}
+  .next p{margin:0;color:#A9BCB7;font-size:14.5px;max-width:52ch}
+  .next .go{font-family:var(--mono);font-weight:700;font-size:14px;background:var(--coral);color:#fff;
+    padding:13px 22px;border-radius:10px;white-space:nowrap;border:none}
+
+  .foot{font-family:var(--mono);font-size:11.5px;color:var(--faint);padding:22px 0 40px;text-align:center}
+
+  @media(max-width:680px){
+    .tools{grid-template-columns:1fr}
+    .row3{grid-template-columns:1fr}
+    section{padding:34px 0}
+  }
+</style>
+
+<header>
+  <div class="wrap">
+    <p class="kicker"><span class="dot"></span> Solution architecture · research-session</p>
+    <h1>IG Media Kit <span class="fade">// anonymous reel fetcher</span></h1>
+    <p class="lede">A self-hosted MCP that pulls top reels + view counts from Instagram channels — with <b>no login, no account, and no link to any personal identity</b>. Mirrors <code style="font-family:var(--mono);font-size:.85em">yt-media-kit</code> ergonomics.</p>
+    <div class="badges">
+      <span class="badge v">REPORT v4</span>
+      <span class="badge pop">anonymous · no account</span>
+      <span class="badge"><b>Python</b> + curl_cffi</span>
+      <span class="badge"><b>4</b> MCP tools</span>
+      <span class="badge">10 of 12 claims <b>pilot-verified</b></span>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">The mechanism, in numbers</p>
+    <h2>How the fetch actually works</h2>
+    <p class="sub">One anonymous endpoint returns everything — views, metadata, and the downloadable video URL — in a single call. No cookies, no credentials. Every number below was measured by live probe on 2026-07-14.</p>
+    <div class="stats">
+      <div class="stat"><div class="n coral">GET</div><div class="l"><code style="font-family:var(--mono);font-size:11px">/api/v1/feed/user/{id}/</code> — the one endpoint</div></div>
+      <div class="stat"><div class="n">play_count</div><div class="l">real "plays" + <code style="font-family:var(--mono);font-size:11px">video_url</code>, returned inline</div></div>
+      <div class="stat"><div class="n">~48</div><div class="l">items per window before the rate wall</div></div>
+      <div class="stat"><div class="n">~6.6<span style="font-size:14px"> min</span></div><div class="l">cooldown after a wall (escalates under abuse)</div></div>
+      <div class="stat"><div class="n">90</div><div class="l">default scan depth, filled across calls</div></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">The surface</p>
+    <h2>Four MCP tools · two modes</h2>
+    <p class="sub">Interactive tools return fast and never block. The batch tool opts into long-running work and reports back through a callback — this is the only place a background job runs.</p>
+    <div class="tools">
+      <div class="tool sync">
+        <div class="top"><span class="id">① list_reels</span><span class="mode">sync · fast</span></div>
+        <div class="sig">list_reels(handle, count,
+  sort_by, min_views,
+  min_duration, max_age_days,
+  scan_depth=90, fresh_fetch=false)</div>
+        <p class="desc">Returns a sorted manifest of a channel's top reels. One paced window per call; accumulates into the store. No downloads.</p>
+      </div>
+      <div class="tool sync">
+        <div class="top"><span class="id">② download_reel</span><span class="mode">sync · fast</span></div>
+        <div class="sig">download_reel(shortcode)</div>
+        <p class="desc">Downloads one reel's mp4 to local disk and returns the path. Re-resolves a fresh signed URL if the stored one has expired.</p>
+      </div>
+      <div class="tool async">
+        <div class="top"><span class="id">③ start_batch_fetch</span><span class="mode">async · job</span></div>
+        <div class="sig">start_batch_fetch(handles[],
+  top_n, scope="global",
+  sort_by, …filters,
+  download_top=false,
+  callback_url, callback_secret?)</div>
+        <p class="desc">Kicks off a background pull across many channels, aggregates a cross-channel top-N, then POSTs your <code style="font-family:var(--mono);font-size:11.5px">callback_url</code>. Returns a <code style="font-family:var(--mono);font-size:11.5px">job_id</code> instantly.</p>
+      </div>
+      <div class="tool async">
+        <div class="top"><span class="id">④ get_batch_status</span><span class="mode">async · poll</span></div>
+        <div class="sig">get_batch_status(job_id)</div>
+        <p class="desc">The poll fallback and source of truth: job state, channels done/total, items collected, result path — even if the callback never lands.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Component diagram</p>
+    <h2>One fetch engine, two ways to drive it</h2>
+    <p class="sub">The Fetcher — a single paced ~40-item window — is the shared primitive. Interactive tools call it synchronously; the batch runner calls the same primitive in a background job that's allowed to wait out cooldowns.</p>
+
+    <div class="diagram">
+      <div class="node mcp">
+        <div class="nh"><span class="tag teal"></span>MCP server · FastMCP</div>
+        <div class="nb">Exposes ① <code>list_reels</code> · ② <code>download_reel</code> · ③ <code>start_batch_fetch</code> · ④ <code>get_batch_status</code></div>
+      </div>
+
+      <div class="arrow">▼</div>
+
+      <div class="row3">
+        <div class="node">
+          <div class="nh"><span class="tag teal"></span>Fetcher</div>
+          <div class="nb"><code>curl_cffi</code> chrome fingerprint. <code>web_profile_info</code> → user_id → feed page (12/page). ONE ~40-item window. Never sleeps.</div>
+        </div>
+        <div class="node">
+          <div class="nh"><span class="tag coral"></span>Batch runner</div>
+          <div class="nb">Background job. Loops the Fetcher per handle, <b>may wait out</b> the ~6.6-min cooldowns, aggregates top-N, fires the callback.</div>
+        </div>
+        <div class="node">
+          <div class="nh"><span class="tag ink"></span>Downloader</div>
+          <div class="nb">Plain GET of the time-signed <code>fbcdn</code> mp4 URL that already arrived in the feed JSON. No yt-dlp.</div>
+        </div>
+      </div>
+
+      <div class="arrow">▼ &nbsp; read / checkpoint after every page &nbsp; ▼</div>
+
+      <div class="node store">
+        <div class="nh"><span class="tag ink"></span>Store &nbsp;<span style="font-weight:400;color:var(--faint);font-family:var(--sans);font-size:12px">— source of truth, crash-safe</span></div>
+        <div class="nb"><code>store/&lt;handle&gt;.csv</code> manifest · <code>store/&lt;handle&gt;.state.yaml</code> cursors · <code>store/_batch/&lt;job_id&gt;.*</code> · <code>media/&lt;handle&gt;/&lt;shortcode&gt;.mp4</code></div>
+      </div>
+
+      <div class="legend">
+        <span><span class="tag teal"></span> synchronous path — returns fast, never blocks</span>
+        <span><span class="tag coral"></span> async path — background job, may wait out cooldowns</span>
+        <span><span class="tag ink"></span> durable state — resumes from last cursor on any crash</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Solution flows</p>
+    <h2>What each call does</h2>
+    <div class="flows">
+      <div class="flow">
+        <div class="fh"><span class="fl">FLOW A</span><span class="ft">list_reels(handle)</span><span class="fmeta">synchronous</span></div>
+        <ol>
+          <li><b>Top-check</b> — page from the top for new posts until the stored <code>high_water_id</code>; merge.</li>
+          <li><b>Deepen</b> — if depth &lt; 90, resume the saved cursor and fetch older items until 90 or the ~40 window budget is spent.</li>
+          <li>On a rate wall (401) → stop, save cursors, <b>return what's stored</b> (graceful partial).</li>
+          <li>Filter + sort the pool → return the top <code>count</code>. <b>Call 1 ≈ 40 reels; later spaced calls fill to 90</b>, then cheap refresh.</li>
+        </ol>
+      </div>
+      <div class="flow">
+        <div class="fh"><span class="fl">FLOW B</span><span class="ft">download_reel(shortcode)</span><span class="fmeta">synchronous</span></div>
+        <ol>
+          <li>Look up the shortcode → owner handle, stored URL, existing <code>local_mp4</code>.</li>
+          <li>Already downloaded → return the path.</li>
+          <li>Else resolve a <b>fresh</b> signed URL (re-scan the owner feed if the stored one expired) → GET → save → update manifest.</li>
+        </ol>
+      </div>
+      <div class="flow async">
+        <div class="fh"><span class="fl">FLOW C</span><span class="ft">start_batch_fetch(handles[], …, callback_url)</span><span class="fmeta">async · ~1–2 h for 10 fresh channels</span></div>
+        <ol>
+          <li>Persist the job, <b>return <code>job_id</code> immediately</b> — the caller is free.</li>
+          <li>Background: for each handle, run the call-driven fill; on a wall, <b>sleep the cooldown</b> and resume from the checkpoint cursor.</li>
+          <li>Aggregate all channels → sort → <code>scope="global"</code> top-N across all (or <code>per_channel</code>). Optionally download the top-N.</li>
+          <li><b>POST the callback</b> with the result (3× retry). If it never lands, <code>get_batch_status</code> still holds the answer.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Data model</p>
+    <h2>Store layout — CSV for data, YAML for state</h2>
+    <p class="sub">Format split on purpose: flat CSV manifests stay token-lean for a future LLM layer; state is a handful of YAML keys. No large JSON blobs.</p>
+    <pre class="tree"><span class="c"># the manifest an LLM or human reads — flat, greppable, token-lean</span>
+store/<span class="k">&lt;handle&gt;</span>.csv          shortcode, play_count, likes, comments, caption,
+                            taken_at, duration, product_type, video_url,
+                            local_mp4, fetched_at
+
+<span class="c"># resume state — tiny, human-readable</span>
+store/<span class="k">&lt;handle&gt;</span>.state.yaml    user_id · high_water_id · coverage:[{newest,oldest,cursor}] · last_run
+
+<span class="c"># async batch job + its aggregated result</span>
+store/_batch/<span class="k">&lt;job_id&gt;</span>.yaml    status · handles · done/total · params · callback state
+store/_batch/<span class="k">&lt;job_id&gt;</span>.csv     aggregated top-N manifest across the batch
+
+<span class="c"># downloaded video files</span>
+media/<span class="k">&lt;handle&gt;</span>/<span class="k">&lt;shortcode&gt;</span>.mp4
+
+config.yaml                 <span class="c"># channels[], top_reels filters, dirs — mirrors yt-media-kit</span></pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Decision trail</p>
+    <h2>What we rejected, and why</h2>
+    <p class="sub">The anonymous path caps at ~48 items per window. Every route past that cap was investigated — three by live pilot — before accepting the cap. This is the evidence behind the chosen design.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Route past the ~48 cap</th><th>Test</th><th>Result</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td><span class="opt">Bigger <code style="font-family:var(--mono);font-size:12px">count=</code> per request</span></td><td>live pilot — count 12/33/50/100</td><td><span class="pill no">hard-capped at 12/page</span></td><td>dead</td></tr>
+          <tr><td><span class="opt">Slow pacing</span> (rate-based quota?)</td><td>live pilot — 1 page / 20s</td><td><span class="pill no">tripped at 36 · count-based</span></td><td>dead</td></tr>
+          <tr><td><span class="opt">Browser TLS fingerprint</span></td><td>live pilot — curl_cffi chrome</td><td><span class="pill no">no bigger quota · IP-keyed</span></td><td>dead</td></tr>
+          <tr><td><span class="opt">Multi-IP / cloud fan-out</span></td><td>reasoned</td><td><span class="pill warn">datacenter IPs throttled harder · ToS</span></td><td>rejected</td></tr>
+          <tr><td><span class="opt">Burner account</span> (deep history)</td><td>3 research scouts</td><td><span class="pill warn">consumable · low-but-nonzero risk to real account</span></td><td>rejected by user</td></tr>
+          <tr class="verdict-chosen"><td><span class="opt">Anonymous feed + call-driven fill</span></td><td>live pilot — verified end-to-end</td><td><span class="pill yes">views + video url · zero account</span></td><td>✓ chosen</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Before the full build</p>
+    <h2>Four throwaway spikes</h2>
+    <p class="sub">Each proves one load-bearing piece in real code. Pass all four → promote to the full kit.</p>
+    <div class="spikes">
+      <div class="spike">
+        <div class="sn">Spike 1 · ½ day</div>
+        <div class="st">Fetch + rank</div>
+        <p class="sd">web_profile_info → feed → parse clips → sort by play_count → write CSV.</p>
+        <div class="sig">▸ real play_counts, top reel correct</div>
+      </div>
+      <div class="spike">
+        <div class="sn">Spike 2 · ½ day</div>
+        <div class="st">Download + URL TTL</div>
+        <p class="sd">GET the signed mp4 URL at T+1h / +6h / +24h to find the expiry cliff.</p>
+        <div class="sig">▸ mp4 plays · TTL measured</div>
+      </div>
+      <div class="spike">
+        <div class="sn">Spike 3 · ½ day</div>
+        <div class="st">Fill to 90 + resume</div>
+        <p class="sd">Repeated spaced calls accumulate 40→80→90; kill mid-run, confirm cursor resume.</p>
+        <div class="sig">▸ 90-reel CSV · clean partials</div>
+      </div>
+      <div class="spike">
+        <div class="sn">Spike 4 · ½ day</div>
+        <div class="st">Batch + callback</div>
+        <p class="sd">Multi-channel job sleeps a cooldown, aggregates global top-N, fires the callback; survives a restart.</p>
+        <div class="sig">▸ callback lands · job resumes</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="next">
+  <div class="wrap">
+    <div class="card">
+      <div>
+        <h2>Ready for your review</h2>
+        <p>If the architecture and flows look right, the next step is a build ticket handing this to implementation.</p>
+      </div>
+      <span class="go">NEXT → create build ticket</span>
+    </div>
+  </div>
+</div>
+
+<p class="foot">IG Media Kit · report v4 · 2026-07-14 · research-session (huginn inline) · anonymous / no-login / no-account</p>

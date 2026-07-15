@@ -152,7 +152,7 @@ def run_download_reel(
         # stored URL fails to download, in run_download_reel; fbcdn can rotate a
         # signed URL before the 24 h margin (a 403/302 on a "fresh enough" URL),
         # and today that hard-errors instead of recovering. Guard it so it never
-        # re-resolves after an already-refreshed URL fails (no metered retry loop).
+        # re-resolves after an already-refreshed URL fails (no metered retry loop). (tracked: #13)
         return _error(shortcode, handle, f"download failed: {detail}")
 
     # --- T3.6 atomic manifest update (local_mp4 + optionally refreshed URL) ---

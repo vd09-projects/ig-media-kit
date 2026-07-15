@@ -394,6 +394,121 @@ def _consume_page(
     return None
 
 
+# --- targeted signed-URL re-resolve (T3.4) ----------------------------------
+
+
+class ResolveOutcome(str, Enum):
+    """Result of a targeted owner-feed re-resolve."""
+
+    FOUND = "found"                    # identity matched; fresh video_url in hand
+    NOT_FOUND = "not_found"            # walked the page/end budget, identity never seen
+    STOP_SIGNAL = "stop_signal"        # a throttle/block/challenge ended the walk
+
+
+@dataclass(frozen=True)
+class ResolveResult:
+    """Output of :func:`resolve_reel_url`. Never raises — a stop_signal or a
+    not-found-in-budget both surface as a typed, non-fatal result the download
+    tool turns into an envelope note."""
+
+    outcome: ResolveOutcome
+    video_url: str | None = None
+    stop_reason: str | None = None      # a StopReason value when outcome is STOP_SIGNAL
+    pages_fetched: int = 0
+    detail: str = ""
+
+
+def resolve_reel_url(
+    client: AnonymousClient,
+    user_id: str,
+    *,
+    shortcode: str,
+    media_id: int | None,
+    max_pages: int = DEFAULT_MAX_PAGES,
+    pace_seconds: float = 0.0,
+    sleep: Callable[[float], None] | None = None,
+) -> ResolveResult:
+    """Re-resolve ONE reel's fresh ``video_versions[0].url`` from the owner feed.
+
+    A find-by-identity traversal, DISTINCT from ``fetch_window``: it does NOT
+    apply the seen/pin/watermark stop logic (the target is by definition already
+    seen — that logic would collect nothing). It pages ``/api/v1/feed/user/{id}/``
+    and returns the fresh URL for the item whose ``code == shortcode`` (PRIMARY,
+    the opaque identity key) or ``pk == media_id`` (NUMERIC backstop).
+
+    STANDING ORDER (load-bearing): the match is keyed ONLY on the shortcode /
+    numeric media_id — NEVER on positional/newest-first feed order. The naive
+    ``items[0]`` is wrong (pins float older reels to the top; the newest item is
+    almost never the target). The identity assertion below makes a positional
+    pick impossible.
+
+    Politeness mirrors the metered window: ``x-ig-app-id`` via ``AnonymousClient``,
+    ``classify_response`` on every page, STOP and return on the first stop_signal,
+    cap at ``max_pages``, and sleep ONLY if a ``sleep`` callable is supplied (the
+    sync download path passes none — it NEVER sleeps)."""
+    cursor: str | None = None
+    pages = 0
+    for page_index in range(max_pages):
+        if page_index > 0 and sleep is not None and pace_seconds > 0:
+            sleep(pace_seconds)
+
+        resp = _get_feed_page(client, user_id, cursor)
+        cls = classify_response(
+            resp.status_code, headers=resp.headers,
+            body=resp.json() or resp.text, location=resp.location,
+        )
+        pages += 1
+
+        if cls.is_stop:
+            return ResolveResult(
+                ResolveOutcome.STOP_SIGNAL,
+                stop_reason=(cls.reason or StopReason.UNKNOWN).value,
+                pages_fetched=pages, detail=cls.detail,
+            )
+        if cls.outcome is Outcome.ERROR:
+            return ResolveResult(
+                ResolveOutcome.STOP_SIGNAL, stop_reason=StopReason.UNKNOWN.value,
+                pages_fetched=pages, detail=cls.detail,
+            )
+
+        body = resp.json() or {}
+        items = body.get("items") or []
+        for item in items:
+            if _identity_matches(item, shortcode, media_id):
+                # Guard the standing order: we only ever return on an identity
+                # match, never a positional pick.
+                assert (
+                    _item_shortcode(item) == shortcode
+                    or (media_id is not None and _item_media_id(item) == media_id)
+                )
+                return ResolveResult(
+                    ResolveOutcome.FOUND, video_url=_video_url(item),
+                    pages_fetched=pages,
+                )
+
+        next_max_id = body.get("next_max_id")
+        more_available = bool(body.get("more_available"))
+        if not more_available or not next_max_id:
+            return ResolveResult(
+                ResolveOutcome.NOT_FOUND, pages_fetched=pages,
+                detail="reached end of feed without an identity match",
+            )
+        cursor = str(next_max_id)
+
+    return ResolveResult(
+        ResolveOutcome.NOT_FOUND, pages_fetched=pages,
+        detail="page budget exhausted without an identity match",
+    )
+
+
+def _identity_matches(item: Mapping[str, Any], shortcode: str, media_id: int | None) -> bool:
+    """True iff ``item`` is the target by opaque shortcode OR numeric media_id.
+    NEVER positional — this is the whole point of the standing order."""
+    if _item_shortcode(item) == shortcode:
+        return True
+    return media_id is not None and _item_media_id(item) == media_id
+
+
 def _get_feed_page(client: AnonymousClient, user_id: str, cursor: str | None) -> ResponseView:
     params: dict[str, Any] = {"count": FEED_PAGE_COUNT}
     if cursor:

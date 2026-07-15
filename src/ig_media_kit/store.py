@@ -124,6 +124,99 @@ class Store:
     def count_reels(self, handle: str) -> int:
         return len(self.load_seen(handle))
 
+    # --- shortcode resolution (T3.1) ---
+    def handles_on_disk(self) -> list[str]:
+        """Every handle that already has a manifest CSV in ``store_dir``.
+
+        The ``<handle>.state.yaml`` sidecars never match ``*.csv`` so they are
+        naturally excluded. Sorted for a deterministic scan order."""
+        if not self.store_dir.exists():
+            return []
+        return sorted(p.stem for p in self.store_dir.glob("*.csv"))
+
+    def find_reel(
+        self, shortcode: str, *, handles: Iterable[str] = ()
+    ) -> tuple[str, dict[str, str]] | None:
+        """Locate the owning handle + manifest row for a bare ``shortcode``.
+
+        Candidate handles = the passed ``handles`` (config channels) UNIONED with
+        every handle that has a CSV on disk (a reel may sit in the store from a
+        prior ``list_reels`` even after its channel was dropped from config),
+        de-duplicated with config order first. A reel has exactly one owner, so
+        the FIRST row whose ``shortcode`` column matches wins. Returns
+        ``(handle, row_dict)`` or ``None``. NO network — a pure CSV read."""
+        candidates = list(dict.fromkeys([*handles, *self.handles_on_disk()]))
+        for handle in candidates:
+            row = self._find_row(handle, shortcode)
+            if row is not None:
+                return handle, row
+        return None
+
+    def _find_row(self, handle: str, shortcode: str) -> dict[str, str] | None:
+        path = self.csv_path(handle)
+        if not path.exists():
+            return None
+        with path.open("r", encoding="utf-8", newline="") as fh:
+            for row in csv.DictReader(fh):
+                if row.get("shortcode") == shortcode:
+                    return dict(row)
+        return None
+
+    # --- atomic manifest local_mp4 / freshness update (T3.6) ---
+    def update_local_mp4(
+        self,
+        handle: str,
+        shortcode: str,
+        *,
+        local_mp4: str,
+        video_url: str | None = None,
+        fetched_at: int | None = None,
+    ) -> bool:
+        """Set ``local_mp4`` (and optionally refresh ``video_url`` + ``fetched_at``)
+        for one ``(handle, shortcode)`` row, rewriting the CSV ATOMICALLY.
+
+        The whole manifest is written to a temp file then ``os.replace``-d in —
+        the same discipline as ``_write_state_atomic`` — so the CSV is never
+        observed half-written. Header, column order (``CSV_COLUMNS``), and every
+        OTHER row/column are preserved verbatim (``csv.DictWriter`` with
+        ``QUOTE_MINIMAL``, exactly as ``_append_csv`` — caption-comma quoting is
+        preserved). When T3.4 produced a fresh signed URL, ``video_url`` +
+        ``fetched_at`` are refreshed IN THE SAME rewrite so the next call sees an
+        in-margin URL and skips a needless re-resolve. Returns True iff the row
+        was found and updated; False if the shortcode is not in this handle's CSV
+        (no file is written in that case)."""
+        path = self.csv_path(handle)
+        if not path.exists():
+            return False
+        with path.open("r", encoding="utf-8", newline="") as fh:
+            rows = list(csv.DictReader(fh))
+
+        found = False
+        for row in rows:
+            if row.get("shortcode") == shortcode:
+                row["local_mp4"] = local_mp4
+                if video_url is not None:
+                    row["video_url"] = video_url
+                if fetched_at is not None:
+                    row["fetched_at"] = str(fetched_at)
+                found = True
+                break
+        if not found:
+            return False
+
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS, quoting=csv.QUOTE_MINIMAL)
+            writer.writeheader()
+            for row in rows:
+                # Restrict to known columns so an unexpected extra key can't wedge
+                # DictWriter; every CSV_COLUMNS key is present in a store-written row.
+                writer.writerow({col: row.get(col, "") for col in CSV_COLUMNS})
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        return True
+
     # --- durable-first write (T1.6) ---
     def write_window(
         self,

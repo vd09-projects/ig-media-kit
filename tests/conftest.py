@@ -25,12 +25,14 @@ class FakeResponse:
     """Mimics the transport return contract (status_code/headers/url/text/json)."""
 
     def __init__(self, status_code: int, body: Any = None, headers: dict | None = None,
-                 url: str = "", cookies: dict | None = None):
+                 url: str = "", cookies: dict | None = None, content: bytes = b""):
         self.status_code = status_code
         self._body = body
         self.headers = headers or {}
         self.url = url
         self.cookies = cookies or {}
+        # Raw bytes for a binary (CDN mp4) fetch — read by AnonymousClient.download_cdn.
+        self.content = content
         self.text = "" if body is None else (body if isinstance(body, str) else json.dumps(body))
 
     def json(self) -> Any:

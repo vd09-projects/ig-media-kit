@@ -239,6 +239,19 @@ class ResponseView:
         return self.headers.get("location") or self.headers.get("Location")
 
 
+@dataclass
+class CdnResponse:
+    """Binary view of an fbcdn asset fetch — carries the raw bytes, NOT text.
+
+    ``get_cdn``/``_to_view`` read ``.text`` and are unsuitable for an mp4 body
+    (decoding binary as text corrupts it). This is the sibling the downloader
+    reads: the redirect-followed final status + the response content bytes."""
+
+    status_code: int
+    content: bytes
+    url: str
+
+
 def _to_view(raw: Any) -> ResponseView:
     headers = dict(getattr(raw, "headers", {}) or {})
     parsed: Any = None
@@ -359,6 +372,33 @@ class AnonymousClient:
             allow_redirects=True,
         )
         return _to_view(raw)
+
+    def download_cdn(self, url: str, *, extra_headers: Mapping[str, Any] | None = None) -> CdnResponse:
+        """GET an fbcdn.net mp4 and return its RAW BYTES (redirect-following).
+
+        The CDN is UNMETERED (CLAUDE.md: metadata metered, CDN not) — no pacing,
+        no stop_signal handling, no sleep here. Redirect-follow is MANDATORY:
+        fbcdn does one redirect and a bare non-following GET returns 302/0 bytes.
+        Reads ``raw.content`` (bytes) rather than ``.text`` so the mp4 payload is
+        never decoded/corrupted. Anonymity is asserted before sending — the CDN
+        GET carries no cookies and no auth, exactly like ``get_cdn``.
+        """
+        headers = dict(extra_headers or {})
+        assert_anonymous(headers=headers)
+        raw = self._transport(
+            "GET",
+            url,
+            headers=headers,
+            params=None,
+            cookies=None,
+            impersonate=IMPERSONATE,
+            allow_redirects=True,
+        )
+        return CdnResponse(
+            status_code=int(getattr(raw, "status_code")),
+            content=getattr(raw, "content", b"") or b"",
+            url=str(getattr(raw, "url", "")),
+        )
 
 
 def _extract_set_cookies(raw: Any) -> dict[str, Any]:

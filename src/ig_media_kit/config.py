@@ -22,11 +22,16 @@ DEFAULT_CONFIG_PATH = "config.yaml"
 
 @dataclass(frozen=True)
 class TopReelsFilter:
-    """Selection filters applied over the accumulated reel pool (later ticket)."""
+    """Selection filters applied over the accumulated reel pool (T2.8 ranking).
+
+    ``min_play_count`` backs the ``min_views`` call arg; ``min_duration`` (seconds)
+    and ``max_age_days`` back the like-named call args. All are optional and
+    skipped when unset."""
 
     count: int = 5
     sort_by: str = "play_count"
     min_play_count: int = 0
+    min_duration: float | None = None
     max_age_days: int | None = None
 
 
@@ -94,6 +99,7 @@ def _config_from_mapping(data: dict[str, Any]) -> Config:
             count=top.get("count", 5),
             sort_by=top.get("sort_by", "play_count"),
             min_play_count=top.get("min_play_count", 0),
+            min_duration=top.get("min_duration"),
             max_age_days=top.get("max_age_days"),
         ),
         fetch=FetchSettings(

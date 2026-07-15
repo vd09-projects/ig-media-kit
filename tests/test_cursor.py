@@ -17,14 +17,18 @@ def _client(pages):
 
 
 def test_caught_up_short_circuits_on_membership_page1():
-    # Newest clip already seen -> stop on the FIRST item, one page, zero rows.
+    # Genuinely caught up: EVERY clip on page 1 already seen (pins included) ->
+    # one page, zero rows, caught_up. This is the load-bearing anti-regression;
+    # after T2.4a's pinned-prefix skip it must STILL short-circuit on page 1
+    # (see also tests/test_pinned_prefix.py, co-located with _consume_page).
     feed = load_feed()
     client = _client([feed])  # only ONE page supplied; a 2nd fetch would raise
     res = fetch_window(client, USER_ID, mode=FetchMode.TOP_SCAN,
-                       seen={"DZclip04"}, high_water_media_id=None, max_pages=4)
+                       seen={"DZclip04", "DZclip02", "DZclip01"},
+                       high_water_media_id=None, max_pages=4)
     assert res.pages_fetched == 1          # <-- load-bearing: did NOT page to the cap
     assert res.reels == []
-    assert res.stop_reason == "caught_up"
+    assert res.stop_reason == "caught_up"  # caught_up, NOT page_cap
 
 
 def test_caught_up_short_circuits_on_watermark_page1():

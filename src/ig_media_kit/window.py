@@ -1,8 +1,14 @@
 """Synchronous window call — wire fetch (top_scan) -> normalize -> store.
 
-Task T1.7. One synchronous "fetch a window for handle H" entry point that
-``list_reels`` and (later) the batch runner both call. This path NEVER sleeps
-and never issues more than ``max_pages`` feed pages.
+Task T1.7. One synchronous "fetch a window for handle H" entry point that this
+path NEVER sleeps and never issues more than ``max_pages`` feed pages.
+
+# TODO: run_window is currently unreferenced — T2 list_reels inlines its own
+# two-phase (top-check + deepen) compose rather than reusing this single-window
+# helper. It is kept as the reusable sync primitive for the async batch runner
+# (a later ticket, the only path permitted to sleep/pace). Consider consolidating
+# the batch runner onto this OR retiring it once that ticket lands, to avoid two
+# compose paths drifting. (tracked: #8)
 
 Flow: load state (user_id, high_water_media_id, deep_cursor) + derived seen ->
 top_scan short-circuiting on seen-membership / media_id watermark -> paced fetch

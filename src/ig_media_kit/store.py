@@ -54,12 +54,20 @@ class State:
     """Per-handle YAML state. Field roles are disambiguated:
     ``high_water_media_id`` + the derived ``seen`` set govern "caught up to new
     posts?" (top_scan); ``deep_cursor`` governs "how far back have we backfilled?"
-    (deep_resume). They advance independently."""
+    (deep_resume). They advance independently.
+
+    ``coverage_segments`` (T2.5, additive — T1 fields untouched) records the
+    contiguous [newest_media_id, oldest_media_id, resume_cursor, terminal] spans
+    the store has actually covered. Normally ONE segment (top -> deep_cursor); a
+    burst of >1 window of genuinely-newer posts can open a 2nd, which deepen
+    later bridges + merges. It is a list of plain dicts so it round-trips through
+    YAML without custom tags."""
 
     user_id: str | None = None
     high_water_media_id: int | None = None   # numeric pk of newest reel ingested
     deep_cursor: str | None = None           # next_max_id toward scan_depth
     last_stop_reason: str | None = None
+    coverage_segments: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -90,11 +98,13 @@ class Store:
             return State()
         with path.open("r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
+        segments = data.get("coverage_segments") or []
         return State(
             user_id=data.get("user_id"),
             high_water_media_id=_as_int(data.get("high_water_media_id")),
             deep_cursor=data.get("deep_cursor"),
             last_stop_reason=data.get("last_stop_reason"),
+            coverage_segments=[dict(s) for s in segments if isinstance(s, dict)],
         )
 
     def load_seen(self, handle: str) -> set[str]:
@@ -173,6 +183,15 @@ class Store:
             deep_cursor=state.deep_cursor,
         )
 
+    def save_coverage_segments(self, handle: str, segments: Sequence[dict]) -> None:
+        """Persist ``coverage_segments`` (T2.5) atomically, preserving every T1
+        state field. Loads the current state first so the anchor/cursor written
+        by an immediately-preceding ``write_window`` are not clobbered."""
+        self.store_dir.mkdir(parents=True, exist_ok=True)
+        state = self.load_state(handle)
+        state.coverage_segments = [dict(s) for s in segments]
+        self._write_state_atomic(handle, state)
+
     # --- internals ---
     def _append_csv(self, handle: str, reels: Iterable[ReelRecord]) -> None:
         path = self.csv_path(handle)
@@ -195,6 +214,7 @@ class Store:
             "high_water_media_id": state.high_water_media_id,
             "deep_cursor": state.deep_cursor,
             "last_stop_reason": state.last_stop_reason,
+            "coverage_segments": [dict(s) for s in state.coverage_segments],
         }
         tmp = path.with_suffix(path.suffix + ".tmp")
         with tmp.open("w", encoding="utf-8") as fh:

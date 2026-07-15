@@ -41,6 +41,16 @@ FEED_PAGE_COUNT = 12
 CLIP_PRODUCT_TYPE = "clips"
 DEFAULT_MAX_PAGES = 4
 
+# How many LEADING already-seen/pinned items a top_scan tolerates (skips) before
+# it concludes it has caught up. Instagram lets a profile pin a small number of
+# reels to the TOP of the feed; those pins are older (smaller pk) yet appear
+# above genuinely-newer reels (T1.2 live probe: pks_descending == false for
+# natgeo). Without this tolerance a pin at position 0 would hard-stop the scan
+# and hide the newer un-seen reels below it. This bound tracks IG's observed pin
+# cap; it is an implementation detail of the anonymous feed, NOT user config.
+# If IG raises its pin cap above this, top_scan under-collects. (tracked: #9)
+PINNED_PREFIX_BOUND = 3
+
 
 class FetchMode(str, Enum):
     """Two disambiguated traversal modes over the same pagination code.
@@ -318,40 +328,48 @@ def _consume_page(
     """Walk one page newest-first, collecting clips and applying the top_scan
     stop condition. Returns a StopKind if the walk should end, else None.
 
-    The stop check runs over EVERY item (so we stop at the first known clip even
-    if non-clip items precede it); only clips are collected.
+    top_scan stop condition (T2.4a — pinned-prefix hardened):
+      The owner feed is NOT strictly pk-descending: a small bounded prefix of
+      PINNED reels (older, smaller pk, already-seen) can float ABOVE genuinely
+      newer un-seen reels (T1.2 live probe, natgeo). So the walk SKIPS-not-stops
+      across up to ``PINNED_PREFIX_BOUND`` leading already-seen/watermarked
+      items, collecting every un-seen clip below them. "Caught up" is signalled
+      when the page yields ZERO new un-seen clips (either an already-seen item is
+      reached AFTER the pin tolerance / after a new clip, or the page ends having
+      collected nothing new). The numeric watermark BOUNDS paging; it never
+      hard-stops mid-page above an un-seen reel. Correctness rests on the
+      per-shortcode ``seen`` set, never on positional order.
 
-    # TODO: harden top_scan against PINNED reels in fetch._consume_page — the
-    # T1.2 live probe (natgeo, 2026-07-15) showed the owner feed is NOT strictly
-    # pk-descending: pinned reels (older, smaller pk) appear ABOVE newer ones
-    # (pks_descending == false). That weakens the plan's "first-known == caught
-    # up" premise: for an account that pins reels, a subsequent top_scan can hit
-    # a pinned (already-seen) reel first and STOP above genuinely newer reels,
-    # under-collecting them. The caught-up short-circuit (pages_fetched == 1) is
-    # unaffected and correct; only the "new posts below a pinned block" case
-    # under-collects. Fix (own ticket, needs its own review because it must not
-    # reintroduce the budget-burn regression the caught-up==1-page invariant
-    # guards): skip a bounded prefix of known/pinned items before applying the
-    # stop, or resolve the pinned-shortcode set and exclude it from the stop
-    # check. Do NOT weaken the short-circuit to do it. See discovered_followups.
+      The caught-up short-circuit is preserved: a genuinely caught-up top_scan
+      still returns ``CAUGHT_UP`` on page 1 (``pages_fetched == 1``, zero rows),
+      and it returns ``CAUGHT_UP`` — never ``PAGE_CAP`` — so a downstream
+      coverage-segment predicate can tell "caught up" apart from "walked the
+      whole budget without catching up".
+
+    ``deep_resume`` is UNCHANGED — the pin logic is guarded behind the TOP_SCAN
+    branch; deep_resume collects every clip and never applies a watermark stop.
     """
+    pin_skips = 0            # leading already-seen/pinned items tolerated so far
+    collected_this_page = 0  # un-seen clips collected on THIS page (top_scan only)
     for item in items:
         if mode is FetchMode.TOP_SCAN:
             shortcode = _item_shortcode(item)
             media_id = _item_media_id(item)
-            # PRIMARY: seen-set membership (order-tolerant; the authoritative stop).
-            if shortcode is not None and shortcode in seen_set:
-                return StopKind.CAUGHT_UP
-            # SECONDARY: numeric media_id watermark (belt-and-suspenders).
-            # NOTE (T1.2 probe): feed is not strictly pk-descending under pinning,
-            # so this watermark is a monotonic BACKSTOP only — membership above is
-            # authoritative. A per-page min-scan (plan's documented fallback) is
-            # folded into the pinned-reel followup above, not done here.
-            if (
+            # "Known" = already in the seen-set (PRIMARY, order-tolerant) OR at/
+            # below the numeric watermark (SECONDARY backstop).
+            is_known = (shortcode is not None and shortcode in seen_set) or (
                 high_water_media_id is not None
                 and media_id is not None
                 and media_id <= high_water_media_id
-            ):
+            )
+            if is_known:
+                # Tolerate a bounded LEADING prefix of known/pinned items (before
+                # any new clip is collected) — those are pins floating on top.
+                if collected_this_page == 0 and pin_skips < PINNED_PREFIX_BOUND:
+                    pin_skips += 1
+                    continue
+                # Past the pin tolerance, or already collected a new clip below
+                # the pins: this known item is the REAL caught-up boundary.
                 return StopKind.CAUGHT_UP
 
         reel = normalize_item(item, fetched_at)
@@ -363,8 +381,16 @@ def _consume_page(
         seen_set.add(reel.shortcode)
         result.reels.append(reel)
         collected_media_ids.append(reel.media_id)
+        if mode is FetchMode.TOP_SCAN:
+            collected_this_page += 1
         if depth_target is not None and len(result.reels) >= depth_target:
             return StopKind.DEPTH_REACHED
+
+    # top_scan: a page that skipped known/pinned items but collected NOTHING new
+    # is caught up (all its reels were already-seen) — signal it so paging stops
+    # on page 1 rather than walking into the budget.
+    if mode is FetchMode.TOP_SCAN and collected_this_page == 0 and pin_skips > 0:
+        return StopKind.CAUGHT_UP
     return None
 
 

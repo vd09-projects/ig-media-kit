@@ -13,32 +13,45 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from .config import load_config
+from .list_reels import run_list_reels
 from .store import Store
-from .window import run_window
 
 mcp = FastMCP("ig-media-kit")
 
 
 @mcp.tool()
-def list_reels(handle: str, config_path: str | None = None) -> dict[str, Any]:
-    """Fetch one anonymous top_scan window of reels for a public IG handle and
-    persist them to the flat-file store. Returns a summary of the window.
+def list_reels(
+    handle: str,
+    count: int | None = None,
+    sort_by: str | None = None,
+    min_views: int | None = None,
+    min_duration: float | None = None,
+    max_age_days: int | None = None,
+    scan_depth: int | None = None,
+    fresh_fetch: bool = False,
+    config_path: str | None = None,
+) -> dict[str, Any]:
+    """Return a public IG handle's top reels, ranked, filling the store as it goes.
 
-    Synchronous, never sleeps, <=4 feed pages, stops on the first stop_signal.
+    Discovers reels anonymously (no login), accumulating the pool call-by-call
+    toward ``scan_depth`` and returning the top ``count`` ranked by ``sort_by``
+    (``play_count`` | ``like_count`` | ``comment_count`` | ``taken_at``, desc).
+    Filters: ``min_views`` (play_count), ``min_duration`` (seconds),
+    ``max_age_days``. Unset args fall back to the config ``top_reels`` defaults.
+
+    Fast + NEVER-BLOCKING: synchronous, never sleeps, spends at most
+    ``max_pages_per_call`` feed pages across its top-check + deepen phases, and
+    returns a ranked PARTIAL with a "budget cooling" note on the first IG
+    rate-limit rather than blocking. ``fresh_fetch=true`` forces a top-check even
+    when coverage is already complete; ``fresh_fetch=false`` (default) serves
+    straight from the store with ZERO network once coverage is contiguous+deep.
     """
     config = load_config(config_path)
-    outcome = run_window(handle, config=config)
-    return {
-        "handle": outcome.handle,
-        "user_id": outcome.user_id,
-        "persisted": outcome.persisted,
-        "skipped_seen": outcome.skipped_seen,
-        "pages_fetched": outcome.pages_fetched,
-        "stop_reason": outcome.stop_reason,
-        "partial": outcome.partial,
-        "high_water_media_id": outcome.high_water_media_id,
-        "total_reels": outcome.total_reels,
-    }
+    return run_list_reels(
+        handle, config=config, count=count, sort_by=sort_by,
+        min_views=min_views, min_duration=min_duration,
+        max_age_days=max_age_days, scan_depth=scan_depth, fresh_fetch=fresh_fetch,
+    )
 
 
 @mcp.tool()

@@ -6,7 +6,16 @@ Append-only registry of every scope Skald has touched in this project. Maintaine
 ---
 
 ```yaml
-scopes: []
+scopes:
+  - slug: fetch-engine-store-foundation
+    title: T1 — Fetch engine + store foundation
+    created: 2026-07-14T17:50:46Z
+    aliases: []
+    reasoning: >
+      Created for the T1 foundational plumbing plan (anonymous curl_cffi fetch
+      primitive + CSV/YAML store + politeness + config + FastMCP skeleton) that
+      all four MCP tools depend on. Slug is kebab-case from the task's scope
+      noun; first artifact is a mimir planner-task.
 ```
 
 ---

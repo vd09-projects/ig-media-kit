@@ -8,6 +8,42 @@
 
 ```yaml
 decisions:
+  - id: 2026-07-16-process-wide-fetchgate-single-ip-serialization
+    title: "FetchGate: one process-wide singleton serializes all IG-hitting work (single-IP, FIFO-fair)"
+    date: 2026-07-16
+    status: accepted
+    category: architecture/concurrency
+    tags: [fetchgate, concurrency, serialization, single-ip, rate-limit, batch, t4]
+    path: architecture/concurrency/2026-07-16-process-wide-fetchgate-single-ip-serialization.md
+    summary: "All IG fetch work in the process (batch now; sync list_reels/download once T5 wraps them) is serialized through one module-level FetchGate singleton — at most one IG window in flight, FIFO-fair — because the rate limit is per-IP and the process holds one IP, so parallel fetching buys nothing and risks escalation; CDN downloads stay ungated."
+
+  - id: 2026-07-16-persisted-cooldown-in-gate-metered-stop
+    title: "Escalating cooldown is persisted, and note_metered_stop is applied inside the gate critical section"
+    date: 2026-07-16
+    status: accepted
+    category: architecture/reliability
+    tags: [fetchgate, cooldown, escalation, 401, back-off, persistence, restart-safety, t4]
+    path: architecture/reliability/2026-07-16-persisted-cooldown-in-gate-metered-stop.md
+    summary: "The gate persists cooldown_until + escalation_count to store/_batch/_gate.json so a restart mid-cooldown sleeps out the remainder instead of re-hitting IG, and registers the metered-stop back-off while still holding the gate so no second worker can open a window on a just-401'd IP — making the stop/back-off/escalate/never-poll politeness invariant atomic and restart-durable."
+
+  - id: 2026-07-16-daemon-thread-batch-runner-with-explicit-resume
+    title: "Batch execution = daemon thread + durable per-window checkpoint + explicit resume_pending_jobs (no broker, no auto-watcher)"
+    date: 2026-07-16
+    status: accepted
+    category: architecture
+    tags: [batch, daemon-thread, checkpoint, resume, no-broker, flat-file, job, t4]
+    path: architecture/2026-07-16-daemon-thread-batch-runner-with-explicit-resume.md
+    summary: "start_batch_fetch returns a job_id instantly and runs _run_job on a daemon thread with per-window checkpointing; a full process restart is recovered by an explicit resume_pending_jobs(config) sweep (called by T5 startup and the first start_batch_fetch), not a module-import side-effect and not a continuously-running orphan watcher — the simplest resume-safe model for the flat-file, no-DB stack."
+
+  - id: 2026-07-16-ssrf-guarded-anonymous-callback-transport
+    title: "Callback transport is bare/anonymous and SSRF-guarded; result durability is decoupled from callback delivery"
+    date: 2026-07-16
+    status: accepted
+    category: architecture/security
+    tags: [callback, ssrf, anonymous, transport, result-durability, dns-rebind, egress, t4]
+    path: architecture/security/2026-07-16-ssrf-guarded-anonymous-callback-transport.md
+    summary: "The completion callback POST uses a separate non-IG transport (no x-ig-app-id, no cookies), requires https, blocks private/link-local/loopback/metadata IPs, pins the connection to the validated IP (DNS-rebind TOCTOU), and disables redirect-follow; the aggregated result is persisted to result.json BEFORE any callback attempt so 'done' never depends on delivery (at-least-once best-effort; get_batch_status is the durable fallback)."
+
   - id: 2026-07-16-aged-out-typed-error-vs-stop-signal-partial
     title: "Aged-out / not-found-in-budget re-resolve returns a typed error with partial=False, disambiguated from stop_signal partial"
     date: 2026-07-16

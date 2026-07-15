@@ -42,6 +42,24 @@ scopes:
       Slug supplied explicitly via --scope; kebab-case with the T3 task prefix,
       mirroring the T1/T2 scope naming convention. First artifact is a mimir
       planner-task.
+  - slug: t4-async-batch-runner
+    title: T4 — Async batch runner: start_batch_fetch + get_batch_status + callback
+    created: 2026-07-16T03:18:00Z
+    aliases: []
+    reasoning: >
+      Created for the T4 plan breaking down the async batch subsystem — the
+      only background-job path — on top of the shipped T2 fetch engine
+      (run_window / coverage / ranking / Store) and T3 downloader
+      (run_download_reel): start_batch_fetch returns a job_id instantly and runs
+      detached, a serialized single-IP fetch worker fills each handle across
+      escalating rate-limit cooldowns (the runner is the only sleeper) and
+      checkpoints after every window for kill/restart resume, global/per_channel
+      top-N aggregation over the full deduped pool, optional download_top, and a
+      bare non-IG callback POST with bounded retry+backoff decoupled from result
+      durability; get_batch_status is a pure read. Slug supplied explicitly via
+      --scope; kebab-case with the T4 task prefix, mirroring the T1/T2/T3 scope
+      naming convention. First artifact is a mimir planner-task with the
+      concurrency overlay active.
 ```
 
 ---

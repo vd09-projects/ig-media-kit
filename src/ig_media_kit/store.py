@@ -21,14 +21,21 @@ Design decisions (stated per T1.6):
 from __future__ import annotations
 
 import csv
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 import yaml
 
 from .fetch import FetchMode, ReelRecord
+
+# Sub-directory (under ``store_dir``) that holds the async-batch (T4) artifact
+# family — one ``<job_id>.json`` checkpoint + ``<job_id>.result.json`` per job,
+# plus the durable ``_gate.json`` cooldown state. Kept apart from the per-handle
+# ``<handle>.csv`` / ``.state.yaml`` files (the ``*.csv`` glob never matches it).
+BATCH_DIRNAME = "_batch"
 
 # CSV column order — token-lean, mirroring yt-media-kit, carrying BOTH the
 # shortcode (identity/dedupe key) AND media_id (numeric ordered anchor).
@@ -285,7 +292,87 @@ class Store:
         state.coverage_segments = [dict(s) for s in segments]
         self._write_state_atomic(handle, state)
 
+    # --- async-batch checkpoint family (T4, additive) ----------------------
+    def batch_dir(self) -> Path:
+        return self.store_dir / BATCH_DIRNAME
+
+    def batch_job_path(self, job_id: str) -> Path:
+        return self.batch_dir() / f"{job_id}.json"
+
+    def batch_result_path(self, job_id: str) -> Path:
+        return self.batch_dir() / f"{job_id}.result.json"
+
+    def save_batch_job(self, job_id: str, data: dict[str, Any]) -> None:
+        """Write a job checkpoint to ``_batch/<job_id>.json`` ATOMICALLY (the same
+        temp-file + fsync + ``os.replace`` discipline as ``_write_state_atomic``).
+        Rewritten after every window + phase transition; a reader (status/resume)
+        therefore always sees a whole prior OR whole new file, never a torn one."""
+        self._write_json_atomic(self.batch_job_path(job_id), data)
+
+    def load_batch_job(self, job_id: str) -> dict[str, Any] | None:
+        return self._read_json(self.batch_job_path(job_id))
+
+    def save_batch_result(self, job_id: str, data: dict[str, Any]) -> None:
+        """Write the aggregated result envelope to ``_batch/<job_id>.result.json``
+        atomically. Persisted BEFORE any callback attempt so the result is durable
+        independent of delivery (result durability ⟂ callback delivery)."""
+        self._write_json_atomic(self.batch_result_path(job_id), data)
+
+    def load_batch_result(self, job_id: str) -> dict[str, Any] | None:
+        return self._read_json(self.batch_result_path(job_id))
+
+    def list_batch_jobs(self) -> list[str]:
+        """Every job_id with a checkpoint in ``_batch/`` (sorted, deterministic).
+
+        Excludes ``*.result.json`` sidecars and the ``_gate.json`` cooldown-state
+        file — only the canonical ``<job_id>.json`` checkpoints are returned."""
+        d = self.batch_dir()
+        if not d.exists():
+            return []
+        out: list[str] = []
+        for p in d.glob("*.json"):
+            name = p.name
+            if name.endswith(".result.json") or name == "_gate.json":
+                continue
+            out.append(p.stem)
+        return sorted(out)
+
+    def sweep_batch_tmp(self) -> int:
+        """Remove inert leftover ``*.tmp`` files in ``_batch/`` (an orphaned temp
+        from a crash between temp-write and ``os.replace``). The canonical file is
+        guaranteed old-or-new by ``os.replace``; the temp is pure garbage. Returns
+        the number removed. Never touches a canonical ``.json`` file."""
+        d = self.batch_dir()
+        if not d.exists():
+            return 0
+        removed = 0
+        for p in d.glob("*.tmp"):
+            try:
+                p.unlink()
+                removed += 1
+            except OSError:
+                pass
+        return removed
+
     # --- internals ---
+    def _write_json_atomic(self, path: Path, data: dict[str, Any]) -> None:
+        """Atomic JSON write (temp + fsync + ``os.replace``) — the machine-data
+        sibling of ``_write_state_atomic`` (YAML is for human-owned per-handle
+        state; JSON is token-lean + exact round-trip for batch checkpoints)."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump(data, fh, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+
+    def _read_json(self, path: Path) -> dict[str, Any] | None:
+        if not path.exists():
+            return None
+        with path.open("r", encoding="utf-8") as fh:
+            return json.load(fh)
+
     def _append_csv(self, handle: str, reels: Iterable[ReelRecord]) -> None:
         path = self.csv_path(handle)
         write_header = not path.exists()

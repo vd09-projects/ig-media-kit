@@ -1,0 +1,26 @@
+# IG Media Kit config — mirrors yt-media-kit ergonomics.
+# Override the path with $IG_MK_CONFIG.
+
+# Public Instagram handles to scan (no @, no URL — just the handle).
+channels:
+  - natgeo
+  - nike
+
+# Top-reel selection filters (applied over the accumulated pool, later ticket).
+top_reels:
+  count: 5
+  sort_by: "play_count"        # play_count | like_count | comment_count | taken_at
+  min_play_count: 100000
+  max_age_days: 30             # null = all time
+
+# Fetch politeness / effort knobs. The metadata API is IP-rate-limited
+# (~48 items / ~6.6 min, escalating under abuse) — do not raise these blindly.
+fetch:
+  scan_depth: 90              # per-handle fetch-effort target (deep_resume aim)
+  max_pages_per_call: 4       # hard cap on feed pages per call
+  page_pace_seconds: 1.5      # inter-page pause — ONLY honoured off the sync path
+
+# Output directories (git-ignored runtime data).
+output:
+  store_dir: "./store"
+  media_dir: "./media"

@@ -1,0 +1,71 @@
+{
+  "num_results": 4,
+  "more_available": true,
+  "next_max_id": "3300000000000000001_787132",
+  "items": [
+    {
+      "pk": "3300000000000000004",
+      "id": "3300000000000000004_787132",
+      "code": "DZclip04",
+      "product_type": "clips",
+      "media_type": 2,
+      "play_count": 4531103,
+      "ig_play_count": 4600000,
+      "like_count": 210345,
+      "comment_count": 1892,
+      "taken_at": 1720900000,
+      "video_duration": 109.0,
+      "caption": {"text": "Newest reel, with a comma, and more"},
+      "video_versions": [
+        {"url": "https://instagram.fxyz1-1.fbcdn.net/o1/v/reel04.mp4", "width": 720, "height": 1280}
+      ]
+    },
+    {
+      "pk": "3300000000000000003",
+      "id": "3300000000000000003_787132",
+      "code": "DZcarousel3",
+      "product_type": "carousel_container",
+      "media_type": 8,
+      "play_count": null,
+      "ig_play_count": null,
+      "like_count": 88123,
+      "comment_count": 401,
+      "taken_at": 1720800000,
+      "caption": {"text": "An image carousel — not a clip"}
+    },
+    {
+      "pk": "3300000000000000002",
+      "id": "3300000000000000002_787132",
+      "code": "DZclip02",
+      "product_type": "clips",
+      "media_type": 2,
+      "play_count": 62869173,
+      "ig_play_count": 63000000,
+      "like_count": 990122,
+      "comment_count": 12034,
+      "taken_at": 1720700000,
+      "video_duration": 32.5,
+      "caption": {"text": "Second reel"},
+      "video_versions": [
+        {"url": "https://instagram.fxyz1-1.fbcdn.net/o1/v/reel02.mp4", "width": 720, "height": 1280}
+      ]
+    },
+    {
+      "pk": "3300000000000000001",
+      "id": "3300000000000000001_787132",
+      "code": "DZclip01",
+      "product_type": "clips",
+      "media_type": 2,
+      "play_count": 15000,
+      "ig_play_count": 15200,
+      "like_count": 1201,
+      "comment_count": 33,
+      "taken_at": 1720600000,
+      "video_duration": 51.0,
+      "caption": {"text": "Oldest reel on this page"},
+      "video_versions": [
+        {"url": "https://instagram.fxyz1-1.fbcdn.net/o1/v/reel01.mp4", "width": 720, "height": 1280}
+      ]
+    }
+  ]
+}

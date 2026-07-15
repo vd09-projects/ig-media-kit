@@ -13,6 +13,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from .config import load_config
+from .download import run_download_reel
 from .list_reels import run_list_reels
 from .store import Store
 
@@ -73,9 +74,30 @@ def batch_fetch(handles: list[str] | None = None, config_path: str | None = None
 
 @mcp.tool()
 def download_reel(shortcode: str, config_path: str | None = None) -> dict[str, Any]:
-    """STUB (later ticket): download an mp4 from fbcdn by shortcode (redirect-
-    follow lives in http_client.get_cdn). Not yet implemented."""
-    return {"stub": True, "shortcode": shortcode, "note": "downloader is a later ticket"}
+    """Download one reel's mp4 by shortcode, refreshing the signed URL if stale.
+
+    Anonymous + on-demand: locates the shortcode's owner in the store, serves an
+    already-downloaded file with ZERO network, otherwise fetches the mp4 from
+    fbcdn (redirect-following, unmetered). If the stored signed URL has aged past
+    its TTL margin (~24 h under the ~36 h fbcdn TTL) it re-resolves a fresh URL
+    from the owner feed — a metered call that stops on the first IG rate-limit
+    and returns a typed partial rather than polling. The downloaded bytes are
+    ftyp-verified before replacing any prior file, and the manifest's
+    ``local_mp4`` (plus the refreshed URL) is rewritten atomically.
+
+    NEVER raises to the client: every failure — unknown shortcode, re-resolve
+    rate-limit, reel aged out of reach, or a bad/empty CDN body — comes back as a
+    typed envelope with a ``note`` (and an ``error``/``partial`` marker)."""
+    try:
+        config = load_config(config_path)
+        return run_download_reel(shortcode, config=config)
+    except Exception as exc:  # noqa: BLE001 — final backstop: the tool must never throw.
+        return {
+            "shortcode": shortcode, "handle": None, "local_mp4": None,
+            "cached": False, "refreshed": False, "partial": False,
+            "stop_reason": None,
+            "note": f"download_reel failed: {exc}", "error": str(exc),
+        }
 
 
 def main() -> None:

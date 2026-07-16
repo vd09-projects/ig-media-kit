@@ -8,6 +8,51 @@
 
 ```yaml
 decisions:
+  - id: 2026-07-16-freeze-four-tool-mcp-surface-public-contract
+    title: "Freeze the four-tool MCP surface as the public contract (top_reels removed, batch_fetch → start_batch_fetch)"
+    date: 2026-07-16
+    status: accepted
+    category: architecture/api-contract
+    tags: [mcp-surface, public-contract, four-tools, rename, top_reels, start_batch_fetch, snapshot-test, t5]
+    path: architecture/api-contract/2026-07-16-freeze-four-tool-mcp-surface-public-contract.md
+    summary: "T5 freezes the MCP surface at exactly four tools (list_reels, download_reel, start_batch_fetch, get_batch_status) with explicit typed schemas — deleting the stale top_reels stub and renaming batch_fetch → start_batch_fetch (alias-free, pre-1.0, no external consumers) — and guards it with a name+param snapshot test so any later schema change is a semver-visible contract event."
+
+  - id: 2026-07-16-never-raise-typed-envelope-all-four-tools
+    title: "Never-raise typed envelope on all four MCP tools (list_reels included)"
+    date: 2026-07-16
+    status: accepted
+    category: architecture/api-contract
+    tags: [never-raise, error-envelope, mcp-contract, list_reels, resilience, contract-test, t5]
+    path: architecture/api-contract/2026-07-16-never-raise-typed-envelope-all-four-tools.md
+    summary: "Every MCP tool returns a typed dict envelope and never propagates an exception to the client; T5 wraps the previously-bare list_reels in the same last-resort try/except backstop (failure dict mirrors success shape) without collapsing meaningful inner distinctions like download's partial-vs-aged-out, enforced by a behavioral test that stubs each run_* to throw and asserts a dict return."
+
+  - id: 2026-07-16-observable-product-type-registry-skipreason
+    title: "product_type dispatch = named handler registry + typed SkipReason (observable switch, not a silent drop)"
+    date: 2026-07-16
+    status: accepted
+    category: architecture
+    tags: [product_type, extensibility, registry, skip-reason, normalize, clips, observable, stub, t5]
+    path: architecture/2026-07-16-observable-product-type-registry-skipreason.md
+    summary: "Replaces the hard product_type != clips None-drop with a named _PRODUCT_HANDLERS registry returning a typed SkipReason (UNSUPPORTED_PRODUCT_TYPE / MALFORMED) in a NormalizeResult, so routing is observable and testable; a disabled image stub demonstrates the extension seam behind a follow-up marker while the store stays clips-only, and normalize_item remains a byte-compatible thin wrapper."
+
+  - id: 2026-07-16-divergent-store-rejection-guard-fetchgate
+    title: "One-gate enforcement = reject a divergent-store_dir config_path (not object-identity theater) around the arg-ignoring FetchGate singleton"
+    date: 2026-07-16
+    status: accepted
+    category: architecture/concurrency
+    tags: [fetchgate, singleton, config_path, divergent-store, one-gate, context-mismatch, single-ip, t5]
+    path: architecture/concurrency/2026-07-16-divergent-store-rejection-guard-fetchgate.md
+    summary: "Because get_gate is an argument-ignoring process singleton, asserting gate object-identity is vacuous; T5 enforces one-gate instead by installing a single ServerContext at startup and rejecting (ContextMismatch → typed envelope) any config_path whose store_dir diverges from it, keeping the single persisted cooldown pinned to the store the tools operate on. Sync-path not acquiring the gate is a disclosed, out-of-scope follow-up."
+
+  - id: 2026-07-16-fixture-smoke-harness-defer-live-to-pilots
+    title: "Ship AC#4 as an offline fixture smoke harness; defer the live IG pass to pilots #10/#14"
+    date: 2026-07-16
+    status: accepted
+    category: architecture/testing
+    tags: [smoke-harness, fixture, dry-run, zero-ig, deferred-live, escalating-cooldown, test-seam, t5]
+    path: architecture/testing/2026-07-16-fixture-smoke-harness-defer-live-to-pilots.md
+    summary: "T5's end-to-end smoke ships as a fixture/dry-run harness with zero IG network (enforced by a real-transport-forbidding guard + zero_ig assertion, callback delivered via an injected poster seam so the SSRF/https guard is not loosened); the live pass is documented, opt-in (IG_MK_SMOKE_LIVE=1), and deliberately deferred to pilots #10/#14 rather than run in CI, because the build IP is subject to IG's escalating cooldown."
+
   - id: 2026-07-16-process-wide-fetchgate-single-ip-serialization
     title: "FetchGate: one process-wide singleton serializes all IG-hitting work (single-IP, FIFO-fair)"
     date: 2026-07-16

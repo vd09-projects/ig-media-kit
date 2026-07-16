@@ -12,6 +12,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from .batch import run_get_batch_status, run_start_batch_fetch
 from .config import load_config
 from .download import run_download_reel
 from .list_reels import run_list_reels
@@ -66,10 +67,57 @@ def top_reels(handle: str, config_path: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
-def batch_fetch(handles: list[str] | None = None, config_path: str | None = None) -> dict[str, Any]:
-    """STUB (later ticket): async batch runner across channels (the only path
-    permitted to sleep/pace between pages). Not yet implemented."""
-    return {"stub": True, "handles": handles or [], "note": "batch runner is a later ticket"}
+def batch_fetch(
+    handles: list[str] | None = None,
+    scope: str = "global",
+    count: int | None = None,
+    sort_by: str | None = None,
+    min_views: int | None = None,
+    min_duration: float | None = None,
+    max_age_days: int | None = None,
+    download_top: bool = False,
+    callback_url: str | None = None,
+    config_path: str | None = None,
+) -> dict[str, Any]:
+    """Start an async batch fill + top-N aggregation across channels; returns a
+    ``job_id`` immediately (the ONLY path permitted to sleep/pace between pages).
+
+    Fills each handle (or ``handles`` if given, else config ``channels``) toward
+    ``scan_depth`` across escalating IG rate-limit cooldowns — serialized through
+    the process-wide fetch gate so only one IG window is ever in flight — then
+    ranks a top-``count`` by ``sort_by`` either cross-channel (``scope="global"``)
+    or per handle (``scope="per_channel"``). Optionally downloads the top-N mp4s
+    (``download_top``) and POSTs the result to ``callback_url`` (https-only,
+    SSRF-guarded, best-effort). Poll ``get_batch_status`` for progress + result.
+    Never blocks: returns ``{job_id, phase: queued}`` while the job runs detached."""
+    try:
+        config = load_config(config_path)
+        return run_start_batch_fetch(
+            config=config, handles=handles, scope=scope, count=count,
+            sort_by=sort_by, download_top=download_top, callback_url=callback_url,
+            filters={"min_views": min_views, "min_duration": min_duration,
+                     "max_age_days": max_age_days},
+        )
+    except Exception as exc:  # noqa: BLE001 — the tool must never throw.
+        return {"ok": False, "job_id": None, "phase": None,
+                "error": str(exc), "note": f"batch_fetch failed: {exc}"}
+
+
+@mcp.tool()
+def get_batch_status(job_id: str, config_path: str | None = None) -> dict[str, Any]:
+    """Read an async batch job's phase, per-handle progress, and final result.
+
+    Pure read — no IG network, never triggers a fetch, safe to call during a
+    cooldown. Reports liveness (``fetching`` / ``cooldown-sleeping`` /
+    ``dead-worker``) so a sleeping job is distinguishable from a crashed one, and
+    returns the aggregated result once ready (even if the callback never landed).
+    An unknown ``job_id`` comes back as a typed not-found envelope, never raises."""
+    try:
+        config = load_config(config_path)
+        return run_get_batch_status(job_id, config=config)
+    except Exception as exc:  # noqa: BLE001 — the tool must never throw.
+        return {"found": False, "job_id": job_id, "phase": None,
+                "error": str(exc), "note": f"get_batch_status failed: {exc}"}
 
 
 @mcp.tool()

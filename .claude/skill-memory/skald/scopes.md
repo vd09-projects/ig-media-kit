@@ -60,6 +60,23 @@ scopes:
       --scope; kebab-case with the T4 task prefix, mirroring the T1/T2/T3 scope
       naming convention. First artifact is a mimir planner-task with the
       concurrency overlay active.
+  - slug: t5-ship-mcp-server-packaging
+    title: "T5 — Ship: MCP server wiring, packaging, docs, extensibility, smoke"
+    created: 2026-07-16T07:57:44Z
+    aliases: []
+    reasoning: >
+      Created for the T5 capstone ship plan that assembles the four already-
+      merged tools (list_reels, download_reel, start_batch_fetch,
+      get_batch_status) into one runnable/packaged/documented FastMCP server:
+      shared server context + --config/$IG_MK_CONFIG resolution + explicit
+      resume_pending_jobs at startup (daemon-thread decision), freezing the
+      four-tool public surface (drop top_reels stub, rename batch_fetch ->
+      start_batch_fetch), the product_type dispatch switch + disabled non-clip
+      stub, pyproject/config verification, README rewrite, and an offline
+      fixture/dry-run smoke harness (live IG run deferred to pilots #10/#14).
+      Slug supplied explicitly via --scope; kebab-case with the T5 task prefix,
+      mirroring the T1-T4 scope naming convention. First artifact is a mimir
+      planner-task with the public-api-change overlay active.
 ```
 
 ---

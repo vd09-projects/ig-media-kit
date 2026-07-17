@@ -6,11 +6,12 @@ channels:
   - natgeo
   - nike
 
-# Top-reel selection filters (applied over the accumulated pool, later ticket).
+# Top-reel selection filters (applied over the accumulated pool at ranking time).
 top_reels:
   count: 5
   sort_by: "play_count"        # play_count | like_count | comment_count | taken_at
   min_play_count: 100000
+  # min_duration: 5.0          # seconds; null/omitted = no duration floor
   max_age_days: 30             # null = all time
 
 # Fetch politeness / effort knobs. The metadata API is IP-rate-limited
@@ -20,7 +21,20 @@ fetch:
   max_pages_per_call: 4       # hard cap on feed pages per call
   page_pace_seconds: 1.5      # inter-page pause — ONLY honoured off the sync path
 
-# Output directories (git-ignored runtime data).
+# Async batch-runner knobs (start_batch_fetch — the system's ONLY sleeper).
+# Defaults are conservative-with-margin for IG's measured escalating cooldown
+# (~6.6 min -> ~13 min). All optional; omit the block to accept the defaults.
+batch:
+  retries: 5                  # bounded callback POST attempts (also caps per-handle block wait)
+  backoff_base_s: 2.0         # callback retry backoff: min(cap, base * 2**attempt)
+  backoff_cap_s: 60.0
+  cooldown_base_s: 400.0      # first metered-stop cooldown (~6.6 min); NEVER polled
+  cooldown_escalation_factor: 2.0   # multiplier per successive metered stop (~6.6 -> ~13 min)
+  cooldown_cap_s: 1800.0      # hard upper bound on any single cooldown sleep
+  per_job_page_budget: 200    # max feed pages one handle's fill may spend in a job
+  heartbeat_stale_s: 3600.0   # silence longer than this reads as dead-worker (must exceed longest cooldown)
+
+# Output directories (git-ignored runtime data). Created at runtime if absent.
 output:
   store_dir: "./store"
   media_dir: "./media"

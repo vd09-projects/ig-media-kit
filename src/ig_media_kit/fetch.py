@@ -172,33 +172,105 @@ def _video_url(item: Mapping[str, Any]) -> str | None:
     return None
 
 
-# product_type dispatch — a SWITCH, not a rewrite. Clips today; image/carousel/
-# story slot in here later without restructuring the fetch loop.
-def normalize_item(item: Mapping[str, Any], fetched_at: int) -> ReelRecord | None:
-    """Normalize one feed item to a ReelRecord, or None if it is not a clip.
+# --- product_type dispatch — an OBSERVABLE SWITCH, not a rewrite -------------
+#
+# Adding a media type is a LOCALIZED change: register a handler keyed by
+# ``product_type`` in ``_PRODUCT_HANDLERS`` below. ``clips`` is the only ENABLED
+# type (it carries the real ``play_count``); every other type — including a
+# registered demonstrator stub and any unregistered type — routes to the disabled
+# stub handler, which records a TYPED skip-reason so the routing is OBSERVABLE: a
+# caller can tell "routed to the stub handler" (UNSUPPORTED_PRODUCT_TYPE) from "a
+# clip dropped as malformed" (MALFORMED) from an actually-stored clip — never an
+# indistinguishable bare ``None``.
 
-    Filters on ``product_type == "clips"`` (the extensibility dispatch point).
-    Requires a shortcode (``code``) and a numeric ``pk``; drops malformed items."""
-    if item.get("product_type") != CLIP_PRODUCT_TYPE:
-        return None
+
+class SkipReason(str, Enum):
+    """Why the product_type switch routed an item to a no-op instead of storing it.
+    Makes the dispatch observable — an unstored item carries one of these, never a
+    bare ``None``."""
+
+    UNSUPPORTED_PRODUCT_TYPE = "unsupported_product_type"  # non-clip: routed to the stub
+    MALFORMED = "malformed"                                # a clip missing code / pk
+
+
+@dataclass(frozen=True)
+class NormalizeResult:
+    """Outcome of routing ONE feed item through the product_type switch.
+
+    ``reel`` is set iff the item normalized to a stored clip; otherwise ``reel``
+    is ``None`` and ``skip_reason`` says WHY (observable — never a bare ``None``)."""
+
+    reel: ReelRecord | None
+    skip_reason: SkipReason | None = None
+
+
+# The demonstrator stub type — a non-clip type wired THROUGH the switch but shipped
+# DISABLED (it stores nothing). Proof the seam is a switch, not a rewrite.
+STUB_PRODUCT_TYPE = "image"
+
+
+def _handle_clip(item: Mapping[str, Any], fetched_at: int) -> NormalizeResult:
+    """The one ENABLED handler: normalize a ``clips`` item to a ReelRecord.
+    Behaviour is byte-for-byte the prior ``normalize_item`` clips path."""
     shortcode = item.get("code")
     media_id = _as_int(item.get("pk") or item.get("id"))
     if not shortcode or media_id is None:
-        return None
-    return ReelRecord(
-        shortcode=str(shortcode),
-        media_id=media_id,
-        play_count=_as_int(item.get("play_count")),
-        ig_play_count=_as_int(item.get("ig_play_count")),
-        like_count=_as_int(item.get("like_count")),
-        comment_count=_as_int(item.get("comment_count")),
-        caption=_caption_text(item),
-        taken_at=_as_int(item.get("taken_at")),
-        duration=_coerce_float(item.get("video_duration")),
-        product_type=str(item.get("product_type")),
-        video_url=_video_url(item),
-        fetched_at=fetched_at,
+        return NormalizeResult(None, SkipReason.MALFORMED)
+    return NormalizeResult(
+        ReelRecord(
+            shortcode=str(shortcode),
+            media_id=media_id,
+            play_count=_as_int(item.get("play_count")),
+            ig_play_count=_as_int(item.get("ig_play_count")),
+            like_count=_as_int(item.get("like_count")),
+            comment_count=_as_int(item.get("comment_count")),
+            caption=_caption_text(item),
+            taken_at=_as_int(item.get("taken_at")),
+            duration=_coerce_float(item.get("video_duration")),
+            product_type=str(item.get("product_type")),
+            video_url=_video_url(item),
+            fetched_at=fetched_at,
+        )
     )
+
+
+def _handle_unsupported(item: Mapping[str, Any], fetched_at: int) -> NormalizeResult:
+    """The DISABLED stub handler for non-clip media (image/carousel/story and any
+    unregistered type). It is a no-op that RECORDS the skip (observable) and stores
+    nothing — only clips carry ``play_count``, so non-clip media is deliberately
+    routed-and-skipped, not stored.
+
+    # TODO: implement real image/carousel/story normalization + a store contract
+    # for non-clip media in fetch._PRODUCT_HANDLERS before enabling any of them;
+    # today this seam ships disabled and stores nothing. (separate ticket)"""
+    return NormalizeResult(None, SkipReason.UNSUPPORTED_PRODUCT_TYPE)
+
+
+# The switch. Keyed by ``product_type``; unregistered types fall through to the
+# disabled stub handler. Only ``clips`` is enabled.
+ProductHandler = Callable[[Mapping[str, Any], int], NormalizeResult]
+_PRODUCT_HANDLERS: dict[str, ProductHandler] = {
+    CLIP_PRODUCT_TYPE: _handle_clip,
+    STUB_PRODUCT_TYPE: _handle_unsupported,
+}
+
+
+def normalize_item_routed(item: Mapping[str, Any], fetched_at: int) -> NormalizeResult:
+    """Route one feed item through the product_type switch to its handler and
+    return the typed :class:`NormalizeResult`. Observable: an unstored item comes
+    back with a ``skip_reason``, never a bare ``None``. Unregistered product types
+    dispatch to the disabled stub handler."""
+    handler = _PRODUCT_HANDLERS.get(item.get("product_type"), _handle_unsupported)
+    return handler(item, fetched_at)
+
+
+def normalize_item(item: Mapping[str, Any], fetched_at: int) -> ReelRecord | None:
+    """Normalize one feed item to a ReelRecord, or ``None`` if it is not a stored
+    clip. Backward-compatible thin wrapper over the observable switch
+    (:func:`normalize_item_routed`) — callers that only need the reel keep this
+    (its None-vs-ReelRecord contract is unchanged); tests that need to OBSERVE the
+    routing call :func:`normalize_item_routed`."""
+    return normalize_item_routed(item, fetched_at).reel
 
 
 def _coerce_float(value: Any) -> float | None:

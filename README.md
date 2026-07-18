@@ -99,8 +99,8 @@ them.
 
 | Tool | When to use it |
 |---|---|
-| **`list_reels`** | Fast, synchronous top-N for **one** handle. Never sleeps; serves straight from the store with zero network once coverage is complete, and returns a ranked **partial** (not a block) on the first rate-limit. Reach for this interactively. |
-| **`download_reel`** | Download **one** reel's mp4 by shortcode, on demand. Serves a cached file with zero network; re-resolves an expired signed URL from the owner feed when needed. |
+| **`list_reels`** | Fast, synchronous top-N for **one** handle, **READ-ONLY over the store** — it ranks what's already been fetched and **never touches Instagram** (no fetch, no sleep). Analyze a handle first with `start_batch_fetch`; a not-yet-analyzed handle comes back as a typed error (`error_kind: "not_analyzed"`) telling you to do so. An analyzed handle serves instantly plus a `staleness` block (`last_analyzed_at`, store-count vs the `scan_depth` target, and a `signed_url_maybe_expired` hint over the served rows). Reach for this interactively. |
+| **`download_reel`** | Download **one** reel's mp4 by shortcode, on demand. Serves a cached file with zero network; re-resolves an expired signed URL from the owner feed when needed. Every non-OK envelope carries the same `error_kind`/`retryable` pair as `list_reels` (a cooldown is `retryable: true`; unknown/aged-out/bad-body are `retryable: false`). |
 | **`start_batch_fetch`** | **Async** multi-handle fill + top-N aggregation across channels (global or per-channel), with optional top-N download and an optional callback POST. Returns a `job_id` immediately and runs detached. This is the **only** path allowed to sleep/pace across rate-limit cooldowns. |
 | **`get_batch_status`** | Poll a batch `job_id` for phase, per-handle progress, liveness, and the aggregated result. Pure read — **no IG network**, safe to call during a cooldown. |
 
@@ -116,12 +116,14 @@ code path. Every metadata call carries the public web app id header
 
 - **The metadata API is metered.** IG rate-limits the feed endpoint to roughly
   **~48 items per ~6.6-minute window per IP**, and the cooldown **escalates under abuse**
-  (measured ~6.6 → ~13 min; the item budget degrades ~48 → 36 → 12). So the tools pace
-  pages ~1–2 s, cap ~4 pages per call, **stop and return a partial on the first
-  rate-limit**, and **never poll during a cooldown** (polling extends it). `list_reels`
-  never sleeps; only `start_batch_fetch` may — it sleeps cooldowns out on a background
-  thread, serialized through one process-wide fetch gate so only one IG window is ever in
-  flight.
+  (measured ~6.6 → ~13 min; the item budget degrades ~48 → 36 → 12). So the metered
+  paths pace pages ~1–2 s, cap ~4 pages per call, **stop and return a partial on the first
+  rate-limit**, and **never poll during a cooldown** (polling extends it). Only **two**
+  paths hit IG at all: `start_batch_fetch` (the async runner — the only path that sleeps,
+  cooldowns out on a background thread, serialized through one process-wide fetch gate so
+  only one IG window is ever in flight) and `download_reel`'s >24 h signed-URL re-resolve.
+  **`list_reels` never even *attempts* IG** — it is read-only over the store, so the
+  "never sleeps" invariant is fully true (it can't emit a rate-limit at all).
 - **The video CDN is not metered.** Getting the mp4 URL (the metadata call) is the
   bottleneck; downloading the mp4 from `fbcdn.net` is unmetered and paced freely.
 - **Signed-URL TTL ≈ 36 h.** A reel's `video_versions[0].url` carries an expiry (`oe=`).

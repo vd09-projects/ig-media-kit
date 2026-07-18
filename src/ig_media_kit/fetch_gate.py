@@ -4,7 +4,7 @@ for ALL IG-hitting work in the process (T4, Step 3).
 Politeness is load-bearing and the runner is the system's only sleeper (CLAUDE.md):
 against a single IP there may be AT MOST ONE metadata window in flight
 process-wide — never two handles, never two jobs, never a batch racing a sync
-tool. This gate enforces that invariant. Every batch ``run_list_reels`` /
+tool. This gate enforces that invariant. Every batch ``run_fill`` /
 re-resolve call is wrapped in ``acquire()``; T5 wraps the sync ``list_reels`` /
 ``download`` entrypoints in the SAME gate.
 

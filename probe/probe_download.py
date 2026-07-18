@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from ig_media_kit.config import load_config          # noqa: E402
 from ig_media_kit.download import run_download_reel   # noqa: E402
-from ig_media_kit.list_reels import run_list_reels    # noqa: E402
+from ig_media_kit.fill import run_fill                # noqa: E402
 from ig_media_kit.store import Store                  # noqa: E402
 
 FTYP_OFFSET = 4
@@ -55,10 +55,11 @@ def main() -> int:
     store = Store(config.output.store_dir)
 
     # 1) Ensure the store has at least one reel for this handle (metered path;
-    #    stop_signal-guarded inside run_list_reels — it returns a partial, never
-    #    polls). If discovery is throttled, STOP politely.
+    #    stop_signal-guarded inside run_fill — the command-side fetch primitive
+    #    returns a partial, never polls; list_reels is read-only post-T17). If
+    #    discovery is throttled, STOP politely.
     if store.count_reels(handle) == 0:
-        env = run_list_reels(handle, config=config, count=5)
+        env = run_fill(handle, config=config, count=5)
         if env.get("partial"):
             print(f"POLITE STOP during discovery: {env.get('note')}")
             print("Do NOT retry immediately — the cooldown escalates under abuse.")

@@ -75,6 +75,7 @@ def run_download_reel(
         return _error(
             shortcode, None,
             "shortcode not in store; run list_reels for its owner first",
+            error_kind="not_in_store",
         )
     handle, row = found
 
@@ -139,6 +140,7 @@ def run_download_reel(
                 shortcode, handle,
                 "could not re-resolve within page budget — the reel may have "
                 "aged out of reach; retry later",
+                error_kind="aged_out",
             )
         fresh_url = rr.video_url
         download_url = fresh_url
@@ -153,7 +155,8 @@ def run_download_reel(
         # signed URL before the 24 h margin (a 403/302 on a "fresh enough" URL),
         # and today that hard-errors instead of recovering. Guard it so it never
         # re-resolves after an already-refreshed URL fails (no metered retry loop). (tracked: #13)
-        return _error(shortcode, handle, f"download failed: {detail}")
+        return _error(shortcode, handle, f"download failed: {detail}",
+                      error_kind="download_failed")
 
     # --- T3.6 atomic manifest update (local_mp4 + optionally refreshed URL) ---
     store.update_local_mp4(
@@ -221,16 +224,29 @@ def _ok(
 
 
 def _error(
-    shortcode: str, handle: str | None, note: str, *, partial: bool = False,
+    shortcode: str, handle: str | None, note: str, *,
+    error_kind: str, partial: bool = False,
 ) -> dict[str, Any]:
+    """A terminal, NON-retryable typed error. Carries ``error_kind`` +
+    ``retryable=False`` (T17) so download_reel shares the same machine-branchable
+    error contract as list_reels' not-analyzed error — a consumer can branch on
+    ``retryable`` uniformly across both tools rather than inferring it from
+    ``partial``. Retrying now will not help (unknown shortcode / aged out of reach
+    / bad CDN body), which is exactly what ``retryable=False`` signals."""
     env = _base(shortcode, handle)
-    env.update(note=note, error=note, partial=partial)
+    env.update(note=note, error=note, partial=partial,
+               error_kind=error_kind, retryable=False)
     return env
 
 
 def _partial(shortcode: str, handle: str, stop_reason: str, note: str) -> dict[str, Any]:
+    """A retryable metered-cooldown partial. Carries ``error_kind="rate_limited"``
+    + ``retryable=True`` (T17) — the retryable sibling of ``_error`` — so the whole
+    download error contract exposes the same ``error_kind`` / ``retryable`` pair
+    (retry after the cooldown, in a few minutes)."""
     env = _base(shortcode, handle)
-    env.update(partial=True, stop_reason=stop_reason, note=note)
+    env.update(partial=True, stop_reason=stop_reason, note=note,
+               error_kind="rate_limited", retryable=True)
     return env
 
 

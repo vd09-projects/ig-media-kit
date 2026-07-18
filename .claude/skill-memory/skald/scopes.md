@@ -77,6 +77,24 @@ scopes:
       Slug supplied explicitly via --scope; kebab-case with the T5 task prefix,
       mirroring the T1-T4 scope naming convention. First artifact is a mimir
       planner-task with the public-api-change overlay active.
+  - slug: t17-list-reels-readonly
+    title: Pivot list_reels to READ-ONLY over the store (CQRS hard split)
+    created: 2026-07-18T10:38:24Z
+    aliases: []
+    reasoning: >
+      Created for the T17 plan pivoting the list_reels MCP tool to a pure
+      READ-ONLY query over the local store (hard CQRS split), governed by the
+      accepted api-contract decision (2026-07-16-list-reels-is-read-only-over-
+      the-store-cqrs-split): list_reels NEVER hits IG on any code path — the
+      network top-check/deepen path is excised, a three-state readiness branch
+      distinguishes not-analyzed (typed error steering to start_batch_fetch)
+      from analyzed-shallow/stale (serve + staleness meta) from analyzed-
+      contiguous (serve clean), and only start_batch_fetch + download_reel's
+      >24h re-resolve remain metered. Slug supplied explicitly via --scope;
+      kebab-case with the T17 task prefix, mirroring the T1-T5 scope naming
+      convention. First artifact is a mimir planner-task with the
+      public-api-change overlay active (breaking param removal + response-schema
+      staleness block).
 ```
 
 ---

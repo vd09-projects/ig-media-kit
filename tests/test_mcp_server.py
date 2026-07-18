@@ -11,9 +11,14 @@ from ig_media_kit.config import load_config
 from ig_media_kit.fetch import FetchMode, normalize_item
 
 # The frozen public surface: exactly these four tools, with these param names.
+# DELIBERATE CONTRACT CHANGE (T17 CQRS split, decision
+# 2026-07-16-list-reels-is-read-only-over-the-store-cqrs-split): list_reels dropped
+# the ``fresh_fetch`` param — it is now READ-ONLY over the store and never fetches,
+# so a "force a fresh top-check" flag is meaningless. This snapshot must FAIL if
+# ``fresh_fetch`` ever reappears on list_reels.
 EXPECTED_SURFACE = {
     "list_reels": {"handle", "count", "sort_by", "min_views", "min_duration",
-                   "max_age_days", "scan_depth", "fresh_fetch", "config_path"},
+                   "max_age_days", "scan_depth", "config_path"},
     "download_reel": {"shortcode", "config_path"},
     "start_batch_fetch": {"handles", "scope", "count", "sort_by", "min_views",
                           "min_duration", "max_age_days", "download_top",
@@ -68,6 +73,29 @@ def test_no_stale_top_reels_or_batch_fetch_tool():
     names = {t.name for t in mcp_server.mcp._tool_manager.list_tools()}
     assert "top_reels" not in names        # stale stub removed
     assert "batch_fetch" not in names      # renamed to start_batch_fetch
+
+
+def test_list_reels_response_contract_changed_deliberately(tmp_path):
+    # DELIBERATE response-schema evolution tied to the T17 CQRS decision: an
+    # analyzed handle serves WITH a `staleness` block; a not-analyzed handle
+    # returns a typed error carrying `error_kind`/`retryable` and NO `staleness`.
+    ctx = mcp_server.install_context(
+        load_config(_write_config(tmp_path / "c.yaml", tmp_path / "s")))
+    _seed_contiguous(ctx.store, "natgeo")
+
+    served = mcp_server.list_reels("natgeo")
+    assert not served.get("error"), f"analyzed handle should serve: {served}"
+    assert "staleness" in served, "served envelope must carry the staleness block"
+    assert set(served["staleness"]) == {
+        "last_analyzed_at", "store_count", "scan_depth_target",
+        "signed_url_maybe_expired"}
+    assert served["pages_fetched"] == 0        # never a metered path
+
+    not_analyzed = mcp_server.list_reels("neverfetched")
+    assert not_analyzed["error_kind"] == "not_analyzed"
+    assert not_analyzed["retryable"] is False
+    assert "start_batch_fetch" in not_analyzed["note"]
+    assert "staleness" not in not_analyzed, "error envelope must NOT carry staleness"
 
 
 # --- never-raise across all four --------------------------------------------

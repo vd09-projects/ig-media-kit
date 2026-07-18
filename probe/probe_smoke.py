@@ -45,8 +45,8 @@ from ig_media_kit.batch import BatchDeps, run_start_batch_fetch
 from ig_media_kit.config import load_config
 from ig_media_kit.download import run_download_reel
 from ig_media_kit.fetch import FetchMode, normalize_item
+from ig_media_kit.fill import run_fill
 from ig_media_kit.http_client import AnonymousClient
-from ig_media_kit.list_reels import run_list_reels
 
 # A globally-routable literal so the (unchanged) SSRF guard accepts the benign
 # https callback host — the injected resolver returns THIS, not a real DNS lookup.
@@ -272,18 +272,19 @@ def run_smoke() -> dict[str, Any]:
         trace["get_batch_status"] = {"phase": status["phase"],
                                      "per_handle": status["per_handle"]}
 
-        # --- 5) simulated mid-fetch 401 through the wired shared context ------------
+        # --- 5) simulated mid-fetch 401 through the command-side FILL primitive -----
+        # After the CQRS split (T17) list_reels never fetches, so the mid-fetch 401
+        # politeness path lives in fill.run_fill (the batch runner's fetch unit).
         rl_transport = _FakeTransport([
             _FakeResponse(200, {"data": {"user": {"id": _USER_ID}}}),  # profile ok
             _FakeResponse(401),                                        # first feed page 401
         ])
-        rl = run_list_reels("coldzone", config=ctx.config, store=ctx.store,
-                            client=AnonymousClient(rl_transport), fresh_fetch=True,
-                            now=lambda: now)
+        rl = run_fill("coldzone", config=ctx.config, store=ctx.store,
+                      client=AnonymousClient(rl_transport), now=lambda: now)
         assert rl["partial"] is True, f"401 must yield a partial: {rl}"
         assert rl["stop_reason"] == "rate_limited", f"unexpected stop_reason: {rl}"
         # Politeness counter-metric: stopped on the FIRST 401 (profile + one page only),
-        # capped, never kept paging, never slept (list_reels never sleeps).
+        # capped, never kept paging, never slept (the fill primitive never sleeps).
         assert len(rl_transport.calls) == 2, \
             f"did not stop on first 401 (paged {len(rl_transport.calls)} times)"
         assert rl["pages_fetched"] <= ctx.config.fetch.max_pages_per_call

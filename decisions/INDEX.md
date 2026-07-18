@@ -8,6 +8,42 @@
 
 ```yaml
 decisions:
+  - id: 2026-07-18-fetch-primitive-extracted-into-fill-run-fill
+    title: "IG-fetch primitive extracted out of list_reels into fill.py::run_fill (shared command-side engine)"
+    date: 2026-07-18
+    status: accepted
+    category: architecture
+    tags: [fill, run_fill, cqrs, command-side, fetch-engine, batch, extraction, forced-deviation, ratified, t17]
+    path: architecture/2026-07-18-fetch-primitive-extracted-into-fill-run-fill.md
+    summary: "Forced deviation ratified by review: the metered IG-fetch primitive was lifted verbatim out of run_list_reels into a new fill.py::run_fill and batch._fill_handle re-pointed to it — run_fill is now the single shared command-side fetch engine (command=fill, query=list_reels), the only non-verbatim delta being now-threading into write_window for last_analyzed_at. Both hard invariants hold (list_reels zero-IG; batch stays the only coverage-advancing writer). Filed debt: DUP param helpers → params.py; dead window.py::run_window."
+
+  - id: 2026-07-18-uniform-error-kind-retryable-error-contract
+    title: "Uniform machine-branchable error contract: error_kind + retryable across list_reels and download_reel"
+    date: 2026-07-18
+    status: accepted
+    category: architecture/api-contract
+    tags: [error-kind, retryable, typed-error, error-contract, list_reels, download_reel, machine-branchable, mcp-contract, t17]
+    path: architecture/api-contract/2026-07-18-uniform-error-kind-retryable-error-contract.md
+    summary: "Chose a uniform typed-error shape over a list_reels-only one: every typed error across both tools now carries error_kind + retryable, backfilling download_reel's _error (not_in_store/aged_out/download_failed, retryable=False) and _partial (rate_limited, retryable=True) alongside list_reels' not_analyzed/invalid_params/internal_error. A consumer branches on `retryable` uniformly instead of inferring it from `partial`; both frozen snapshots updated deliberately. Resolves the plan-review's flagged contract asymmetry."
+
+  - id: 2026-07-18-last-analyzed-at-stamped-state-field
+    title: "last_analyzed_at is a stamped State field written in write_window, not derived from max(fetched_at)"
+    date: 2026-07-18
+    status: accepted
+    category: architecture/data-model
+    tags: [last_analyzed_at, state, write_window, staleness, fetched_at, backward-compatible, data-model, t17, d1]
+    path: architecture/data-model/2026-07-18-last-analyzed-at-stamped-state-field.md
+    summary: "D1: last_analyzed_at added as a State field stamped by store.write_window on every persist (Option A), chosen over deriving max(fetched_at) at read time (Option B). Records genuine analysis time distinct from per-row URL-resolve fetched_at, and uniquely survives an empty-but-attempted window that persisted 0 rows. Backward-compatible None default (loads via _as_int(data.get(...))); one-writer/read-only-reader split. Guards against a future max(fetched_at) simplification that would drop the empty-window semantic."
+
+  - id: 2026-07-16-list-reels-is-read-only-over-the-store-cqrs-split
+    title: "list_reels is READ-ONLY over the store (CQRS split — hard split, no fetch escape hatch)"
+    date: 2026-07-16
+    status: accepted
+    category: architecture/api-contract
+    tags: [list_reels, cqrs, read-only, serve-from-store, staleness-metadata, typed-error, never-sleeps, metered-paths, contract-change]
+    path: architecture/api-contract/2026-07-16-list-reels-is-read-only-over-the-store-cqrs-split.md
+    summary: "Hard CQRS split: list_reels becomes a pure READ-ONLY query over the local store and NEVER hits IG (no opt-in fetch escape hatch). An un-analyzed handle returns a typed 'run start_batch_fetch first' error; an analyzed handle ranks/serves instantly plus staleness metadata (last_analyzed_at, store-count vs scan_depth=90, signed-URL-maybe-expired hint). Only the batch fetch and download_reel's >24h re-resolve (#13) remain metered — making 'list_reels never sleeps' fully true and killing cross-channel 401 noise during interactive serve. Supersedes the proposed sync-path non-sleeping cooldown-check follow-up (now moot)."
+
   - id: 2026-07-16-freeze-four-tool-mcp-surface-public-contract
     title: "Freeze the four-tool MCP surface as the public contract (top_reels removed, batch_fetch → start_batch_fetch)"
     date: 2026-07-16

@@ -1,31 +1,35 @@
-"""T2 orchestration — list_reels: serve-from-store gate, budget governor,
-cold-start fill, coverage wiring, partial-on-stop_signal, never-sleep, and
-header provenance. Offline only (FakeTransport)."""
+"""T17 — list_reels is a pure READ-ONLY query over the store.
+
+Covers: the zero-IG-request invariant on BOTH the not-analyzed and analyzed paths
+(the non-negotiable acceptance gate), the typed not-analyzed error, analyzed
+instant serve + ranking over the deduped pool, the staleness metadata block, the
+three-state readiness boundary, and validation. Offline only — no network client
+is ever constructed (asserted). The metered fetch path moved to fill.run_fill (see
+test_fill.py)."""
 
 from __future__ import annotations
 
-import pytest
+import yaml
 
-from ig_media_kit import IG_APP_ID, coverage
+from ig_media_kit import coverage
 from ig_media_kit.config import (
     Config, FetchSettings, OutputSettings, TopReelsFilter,
 )
 from ig_media_kit.fetch import FetchMode, normalize_item
-from ig_media_kit.http_client import AnonymousClient
-from ig_media_kit.list_reels import run_list_reels
+from ig_media_kit.list_reels import SIGNED_URL_TTL_SECONDS, run_list_reels
 from ig_media_kit.store import Store
-from tests.conftest import FakeResponse, FakeTransport
 
 USER_ID = "787132"
+NOW = 1_720_600_000
 
 
-def _config(store_dir, *, scan_depth=90, max_pages=4, count=10):
+def _config(store_dir, *, scan_depth=90, count=10):
     return Config(
         channels=[],
         top_reels=TopReelsFilter(count=count, sort_by="play_count",
                                  min_play_count=0, min_duration=None,
                                  max_age_days=None),
-        fetch=FetchSettings(scan_depth=scan_depth, max_pages_per_call=max_pages,
+        fetch=FetchSettings(scan_depth=scan_depth, max_pages_per_call=4,
                             page_pace_seconds=1.5),
         output=OutputSettings(store_dir=str(store_dir),
                               media_dir=str(store_dir / "media")),
@@ -44,222 +48,230 @@ def _clip(pk: int, code: str, plays: int = 1000) -> dict:
     }
 
 
-def _page(items, *, more=True, next_id="cur"):
-    return {"num_results": len(items), "more_available": more,
-            "next_max_id": next_id, "items": items}
-
-
-def _profile():
-    return FakeResponse(200, {"data": {"user": {"id": USER_ID}}})
-
-
-def _client(responses):
-    # Wrap bare page dicts as 200 responses; pass FakeResponse instances through.
-    wrapped = [r if isinstance(r, FakeResponse) else FakeResponse(200, r)
-               for r in responses]
-    t = FakeTransport(wrapped)
-    return AnonymousClient(t), t
-
-
-class _NoNet:
-    def __call__(self, *a, **k):
-        raise AssertionError("network hit on a serve-from-store path")
-
-
-# --- T2.2 serve-from-store (gate on CONTIGUITY) -----------------------------
-
-def _seed_contiguous_store(store, handle, *, terminal=True):
-    from tests.conftest import load_feed
-    reels = [r for r in (normalize_item(i, 1) for i in load_feed()["items"]) if r]
+def _seed(store, handle, clips, *, terminal, fetched_at=NOW, now=NOW):
+    """Persist clips + a single coverage segment through the real store path.
+    ``terminal`` True -> contiguous (complete); a non-terminal single segment at
+    shallow depth is analyzed-but-not-contiguous (state b)."""
+    reels = [normalize_item(c, fetched_at) for c in clips]
     store.write_window(handle, reels, user_id=USER_ID, next_cursor=None,
-                       stop_reason="end_of_feed", mode=FetchMode.TOP_SCAN)
+                       stop_reason="end_of_feed", mode=FetchMode.TOP_SCAN,
+                       now=lambda: now)
     pks = [r.media_id for r in reels]
     store.save_coverage_segments(
-        handle, [coverage._segment(max(pks), min(pks), None, terminal)])
-    return len(reels)
+        handle, [coverage._segment(max(pks), min(pks),
+                                   None if terminal else "curX", terminal)])
+    return reels
 
 
-def test_serve_from_store_zero_network_when_contiguous(tmp_path):
-    config = _config(tmp_path)
+def _poison_network(monkeypatch):
+    """Make building a REAL IG transport a hard failure, so ANY attempt by
+    list_reels to construct a network client blows up. Returns a hit counter — 0
+    after a read-only call proves zero IG requests were even attempted."""
+    import ig_media_kit.http_client as http_client
+    hits = {"n": 0}
+
+    def _boom(*_a, **_k):
+        hits["n"] += 1
+        raise AssertionError("list_reels attempted to build a real IG transport — "
+                             "it must be zero-network on every path")
+
+    monkeypatch.setattr(http_client, "_default_transport", _boom)
+    return hits
+
+
+# --- zero-IG-request invariant (the headline acceptance gate) ---------------
+
+def test_zero_ig_on_analyzed_serve_path(tmp_path, monkeypatch):
+    hits = _poison_network(monkeypatch)
     store = Store(tmp_path)
-    n = _seed_contiguous_store(store, "natgeo")
+    _seed(store, "natgeo", [_clip(9, "a"), _clip(8, "b")], terminal=True)
 
-    env = run_list_reels("natgeo", config=config, client=AnonymousClient(_NoNet()),
-                         fresh_fetch=False)
-    assert env["pages_fetched"] == 0          # ZERO network
+    env = run_list_reels("natgeo", config=_config(tmp_path), store=store,
+                         now=lambda: NOW)
+    assert env["reels"], "analyzed handle should serve reels"
+    assert env["pages_fetched"] == 0
+    assert hits["n"] == 0, "served path attempted network"
+
+
+def test_zero_ig_on_not_analyzed_error_path(tmp_path, monkeypatch):
+    # Refinement #5: the NOT-ANALYZED path specifically records ZERO network — so
+    # "not analyzed" can never be satisfied by a fetch attempt that failed.
+    hits = _poison_network(monkeypatch)
+    env = run_list_reels("neverseen", config=_config(tmp_path),
+                         store=Store(tmp_path), now=lambda: NOW)
+    assert env["error_kind"] == "not_analyzed"
+    assert hits["n"] == 0, "not-analyzed path attempted network"
+
+
+# --- state (a): not-analyzed typed error ------------------------------------
+
+def test_not_analyzed_returns_typed_error(tmp_path):
+    env = run_list_reels("cold", config=_config(tmp_path), store=Store(tmp_path),
+                         now=lambda: NOW)
     assert env["partial"] is False
+    assert env["retryable"] is False
+    assert env["error_kind"] == "not_analyzed"
+    assert env["reels"] == []
+    assert env["count_returned"] == 0
+    assert "start_batch_fetch" in env["note"]
+    assert "staleness" not in env, "error envelope must not carry staleness"
+    # Mirrors the served shape (superset-compatible) — no exception raised.
+    for key in ("handle", "user_id", "coverage", "pool_depth", "pages_fetched"):
+        assert key in env
+
+
+# --- states (b)/(c): analyzed instant serve + ranking over the pool ----------
+
+def test_analyzed_serve_ranks_over_deduped_pool_not_positional(tmp_path):
+    store = Store(tmp_path)
+    # Rows written OUT of play_count order; a duplicate shortcode is written twice
+    # (the 2nd write is skip-seen deduped) — the served order must be play_count
+    # desc, per-shortcode-deduped, NEVER CSV/feed row order.
+    _seed(store, "h", [_clip(5, "low", 100), _clip(9, "hi", 900),
+                       _clip(7, "mid", 500)], terminal=True)
+    # Second window re-offers "hi" (dupe) + a new "top" — dedupe drops the dupe.
+    store.write_window("h", [normalize_item(_clip(9, "hi", 900), NOW),
+                             normalize_item(_clip(11, "top", 990), NOW)],
+                       user_id=USER_ID, next_cursor=None,
+                       stop_reason="end_of_feed", mode=FetchMode.TOP_SCAN,
+                       now=lambda: NOW)
+
+    env = run_list_reels("h", config=_config(tmp_path), store=store, now=lambda: NOW)
+    codes = [r["shortcode"] for r in env["reels"]]
+    assert codes == ["top", "hi", "mid", "low"], f"not ranked desc / deduped: {codes}"
+    assert codes.count("hi") == 1, "duplicate shortcode was not deduped"
+    assert env["pool_depth"] == 4
     assert env["coverage"]["complete"] is True
-    assert env["pool_depth"] == n
-    assert "served from store" in env["note"]
-    assert env["count_returned"] == n
 
 
-def test_fresh_fetch_true_bypasses_serve_from_store(tmp_path):
-    config = _config(tmp_path)
+def test_analyzed_serve_respects_count(tmp_path):
     store = Store(tmp_path)
-    _seed_contiguous_store(store, "natgeo")
-    # fresh_fetch bypasses the gate -> it WILL top-check (network). Give it a
-    # caught-up page so it stops cheaply.
-    client, t = _client([_page([_clip(9, "seenX")], more=False, next_id=None)])
-    env = run_list_reels("natgeo", config=config, client=client, fresh_fetch=True)
-    assert len(t.calls) >= 1                    # network WAS taken
+    _seed(store, "h", [_clip(9, "a", 900), _clip(8, "b", 800), _clip(7, "c", 700)],
+          terminal=True)
+    env = run_list_reels("h", config=_config(tmp_path), count=2, store=store,
+                         now=lambda: NOW)
+    assert [r["shortcode"] for r in env["reels"]] == ["a", "b"]
+    assert env["count_returned"] == 2
 
 
-def test_two_segment_pool_does_not_serve_from_store(tmp_path):
-    # pool_depth large but 2 segments (a gap) -> NOT contiguous -> network path.
-    config = _config(tmp_path, scan_depth=2)
+# --- staleness metadata block -----------------------------------------------
+
+def test_staleness_present_and_fields(tmp_path):
     store = Store(tmp_path)
-    from tests.conftest import load_feed
-    reels = [r for r in (normalize_item(i, 1) for i in load_feed()["items"]) if r]
-    store.write_window("h", reels, user_id=USER_ID, next_cursor="cb",
-                       stop_reason="page_cap", mode=FetchMode.TOP_SCAN)
-    store.save_coverage_segments("h", [
-        coverage._segment(9999, 9990, "cf", False),
-        coverage._segment(5000, 4990, "cb", False),
-    ])
-    # Give a caught-up top page so the network call is cheap.
-    client, t = _client([_page([], more=False, next_id=None)])
-    env = run_list_reels("h", config=config, client=client, fresh_fetch=False)
-    assert len(t.calls) >= 1                    # gate did NOT fire; network taken
-    assert env["coverage"]["segments"] >= 1
+    _seed(store, "h", [_clip(9, "a"), _clip(8, "b")], terminal=True,
+          fetched_at=NOW, now=NOW)
+    env = run_list_reels("h", config=_config(tmp_path, scan_depth=90), store=store,
+                         now=lambda: NOW + 3600)
+    st = env["staleness"]
+    assert set(st) == {"last_analyzed_at", "store_count", "scan_depth_target",
+                       "signed_url_maybe_expired"}
+    assert st["last_analyzed_at"] == NOW          # stamped by write_window
+    assert st["store_count"] == 2
+    assert st["scan_depth_target"] == 90
+    assert st["signed_url_maybe_expired"] is False  # 1h old << 36h TTL
 
 
-# --- T2.4 cold-start fill + high_water via store ----------------------------
-
-def test_cold_start_fill_persists_and_ranks(tmp_path):
-    config = _config(tmp_path, scan_depth=6)
-    client, t = _client([
-        _profile(),
-        _page([_clip(1006, "a", 500), _clip(1005, "b", 900)], next_id="1005"),
-        _page([_clip(1004, "c", 100), _clip(1003, "d", 700)], next_id="1003"),
-        _page([_clip(1002, "e", 300), _clip(1001, "f", 800)], next_id="1001"),
-    ])
-    env = run_list_reels("natgeo", config=config, client=client)
-    assert env["pool_depth"] == 6
-    assert env["pages_fetched"] == 3            # topcheck_cap = max_pages - 1
+def test_staleness_flags_expired_signed_url(tmp_path):
     store = Store(tmp_path)
-    assert store.load_state("natgeo").high_water_media_id == 1006
-    assert env["coverage"]["segments"] == 1
-    # ranked default play_count desc
-    assert [r["shortcode"] for r in env["reels"]][:2] == ["b", "f"]
+    old = NOW - (SIGNED_URL_TTL_SECONDS + 3600)     # older than the 36h TTL
+    _seed(store, "h", [_clip(9, "a"), _clip(8, "b")], terminal=True,
+          fetched_at=old, now=old)
+    env = run_list_reels("h", config=_config(tmp_path), store=store, now=lambda: NOW)
+    assert env["staleness"]["signed_url_maybe_expired"] is True
+    assert env["staleness"]["last_analyzed_at"] == old
 
 
-def test_high_water_monotonic_with_low_pk_pin(tmp_path):
-    # A low-pk pin among high-pk new reels: high_water must be the MAX numeric
-    # media_id, never the positionally-first (low-pk) item.
-    config = _config(tmp_path, scan_depth=3, max_pages=1)
-    client, t = _client([
-        _profile(),
-        _page([_clip(50, "pin"), _clip(9001, "x"), _clip(9002, "y")],
-              more=False, next_id=None),
-    ])
-    run_list_reels("natgeo", config=config, client=client)
-    assert Store(tmp_path).load_state("natgeo").high_water_media_id == 9002
-
-
-# --- T2.3 budget governor ---------------------------------------------------
-
-def test_budget_cap_across_both_phases(tmp_path):
-    # Pre-seed 2 reels so top-check catches up in 1 page, then deepen gets the
-    # remaining budget -> combined pages_fetched <= max_pages_per_call.
-    config = _config(tmp_path, scan_depth=90, max_pages=4)
+def test_staleness_informational_hint_does_not_flip_complete(tmp_path):
+    # store_count << scan_depth_target, but a terminal single segment is contiguous
+    # -> complete stays True: the depth hint is informational, not a readiness gate.
     store = Store(tmp_path)
-    seeded = [normalize_item(_clip(1006, "a"), 1), normalize_item(_clip(1005, "b"), 1)]
-    store.write_window("h", seeded, user_id=USER_ID, next_cursor="1005",
-                       stop_reason="caught_up", mode=FetchMode.TOP_SCAN)
-    store.save_coverage_segments("h", [coverage._segment(1006, 1005, "1005", False)])
-
-    client, t = _client([
-        _page([_clip(1006, "a"), _clip(1005, "b")], more=True, next_id="1005"),  # top: caught_up
-        _page([_clip(1004, "c"), _clip(1003, "d")], more=True, next_id="1003"),  # deepen p1
-        _page([_clip(1002, "e"), _clip(1001, "f")], more=True, next_id="1001"),  # deepen p2
-        _page([_clip(1000, "g"), _clip(999, "h")], more=True, next_id="999"),    # deepen p3
-    ])
-    env = run_list_reels("h", config=config, client=client, fresh_fetch=True)
-    assert env["pages_fetched"] <= 4
-    # top-check spent 1 page (caught up), deepen got the remaining 3.
-    assert env["pages_fetched"] == 4
-    assert len(t.calls) == 4
+    _seed(store, "h", [_clip(9, "a")], terminal=True)
+    env = run_list_reels("h", config=_config(tmp_path, scan_depth=90), store=store,
+                         now=lambda: NOW)
+    assert env["staleness"]["store_count"] == 1
+    assert env["staleness"]["scan_depth_target"] == 90
+    assert env["coverage"]["complete"] is True
 
 
-def test_governor_never_sleeps(tmp_path, monkeypatch):
-    import time as _time
-    monkeypatch.setattr(_time, "sleep",
-                        lambda *_a, **_k: (_ for _ in ()).throw(
-                            AssertionError("list_reels must never sleep")))
-    config = _config(tmp_path, scan_depth=4)
-    client, t = _client([
-        _profile(),
-        _page([_clip(1006, "a"), _clip(1005, "b")], more=True, next_id="1005"),
-        _page([_clip(1004, "c"), _clip(1003, "d")], more=False, next_id=None),
-    ])
-    env = run_list_reels("natgeo", config=config, client=client)
-    assert env["partial"] is False
-
-
-# --- T2.7 partial on stop_signal --------------------------------------------
-
-def test_stop_signal_in_topcheck_aborts_whole_call(tmp_path):
-    config = _config(tmp_path, scan_depth=90)
-    client, t = _client([
-        _profile(),
-        FakeResponse(401, {"message": "login_required"}),  # first feed page 401
-    ])
-    env = run_list_reels("natgeo", config=config, client=client)
-    assert env["partial"] is True
-    assert env["pages_fetched"] == 1                 # deepen page NOT spent
-    assert "budget cooling" in env["note"]
-    assert env["stop_reason"] == "rate_limited"
-    assert len(t.calls) == 2                          # profile + ONE feed page only
-
-
-def test_stop_signal_in_deepen_returns_partial(tmp_path):
-    config = _config(tmp_path, scan_depth=90)
+def test_staleness_last_analyzed_at_none_on_legacy_state(tmp_path):
+    # A pre-T17 state YAML has no last_analyzed_at -> loads as None and surfaces as
+    # None in staleness (backward compatibility).
     store = Store(tmp_path)
-    seeded = [normalize_item(_clip(1006, "a"), 1), normalize_item(_clip(1005, "b"), 1)]
-    store.write_window("h", seeded, user_id=USER_ID, next_cursor="1005",
-                       stop_reason="caught_up", mode=FetchMode.TOP_SCAN)
-    store.save_coverage_segments("h", [coverage._segment(1006, 1005, "1005", False)])
-    client, t = _client([
-        _page([_clip(1006, "a"), _clip(1005, "b")], more=True, next_id="1005"),  # top caught_up
-        FakeResponse(429, {"message": "too many"}),                              # deepen 429
-    ])
-    env = run_list_reels("h", config=config, client=client, fresh_fetch=True)
-    assert env["partial"] is True
-    assert "budget cooling" in env["note"]
-    assert env["pool_depth"] == 2                     # persisted pool intact
-    assert env["stop_reason"] == "rate_limited"
+    reels = [normalize_item(_clip(9, "a"), NOW)]
+    store.write_window("h", reels, user_id=USER_ID, next_cursor=None,
+                       stop_reason="end_of_feed", mode=FetchMode.TOP_SCAN)
+    # Rewrite state.yaml WITHOUT the last_analyzed_at key (legacy shape).
+    path = store.state_path("h")
+    data = yaml.safe_load(path.read_text())
+    data.pop("last_analyzed_at", None)
+    data["coverage_segments"] = [dict(coverage._segment(9, 9, None, True))]
+    path.write_text(yaml.safe_dump(data))
+    assert store.load_state("h").last_analyzed_at is None
+
+    env = run_list_reels("h", config=_config(tmp_path), store=store, now=lambda: NOW)
+    assert env["staleness"]["last_analyzed_at"] is None
+    assert env["reels"], "legacy-state handle still serves"
 
 
-# --- T2.1 validation --------------------------------------------------------
+# --- three-state readiness boundary -----------------------------------------
 
-def test_invalid_sort_by_returns_clean_error(tmp_path):
-    config = _config(tmp_path)
-    env = run_list_reels("natgeo", config=config, sort_by="view_count",
-                         client=AnonymousClient(_NoNet()))
+def test_boundary_a_empty_store_errors(tmp_path):
+    env = run_list_reels("h", config=_config(tmp_path), store=Store(tmp_path),
+                         now=lambda: NOW)
+    assert env["error_kind"] == "not_analyzed"
+
+
+def test_boundary_b_one_shallow_reel_serves_not_errors(tmp_path):
+    # 1 reel, single NON-terminal shallow segment -> analyzed (serve), complete=False.
+    store = Store(tmp_path)
+    _seed(store, "h", [_clip(9, "a")], terminal=False)
+    env = run_list_reels("h", config=_config(tmp_path, scan_depth=90), store=store,
+                         now=lambda: NOW)
+    assert "error" not in env, "a shallow-but-analyzed handle must serve, not error"
+    assert env["reels"]
+    assert env["coverage"]["complete"] is False
+    assert "staleness" in env
+
+
+def test_boundary_b_segments_present_empty_pool_serves_empty(tmp_path):
+    # Edge (Domain reviewer): coverage evidence exists (high_water/segments) but the
+    # pool is empty (a window persisted 0 rows). That is ANALYZED -> serve an empty
+    # ranked list, NOT the not-analyzed error.
+    store = Store(tmp_path)
+    store.write_window("h", [], user_id=USER_ID, next_cursor="curX",
+                       stop_reason="page_cap", mode=FetchMode.TOP_SCAN,
+                       now=lambda: NOW)
+    store.save_coverage_segments("h", [coverage._segment(9, 8, "curX", False)])
+    assert store.load_state("h").coverage_segments  # evidence present
+    env = run_list_reels("h", config=_config(tmp_path), store=store, now=lambda: NOW)
+    assert "error" not in env, "segments-present/empty-pool is analyzed, not an error"
+    assert env["reels"] == []
+    assert "staleness" in env
+
+
+def test_boundary_c_contiguous_serves_complete(tmp_path):
+    store = Store(tmp_path)
+    _seed(store, "h", [_clip(9, "a"), _clip(8, "b")], terminal=True)
+    env = run_list_reels("h", config=_config(tmp_path), store=store, now=lambda: NOW)
+    assert "error" not in env
+    assert env["coverage"]["complete"] is True
+
+
+# --- validation (uniform error contract) ------------------------------------
+
+def test_invalid_sort_by_returns_clean_typed_error(tmp_path):
+    env = run_list_reels("h", config=_config(tmp_path), sort_by="view_count",
+                         store=Store(tmp_path), now=lambda: NOW)
     assert env["reels"] == []
     assert "invalid sort_by" in env["error"]
+    assert env["error_kind"] == "invalid_params"
+    assert env["retryable"] is False
     assert env["pages_fetched"] == 0
+    assert "staleness" not in env
 
 
-def test_negative_count_returns_clean_error(tmp_path):
-    config = _config(tmp_path)
-    env = run_list_reels("natgeo", config=config, count=-1,
-                         client=AnonymousClient(_NoNet()))
+def test_negative_count_returns_clean_typed_error(tmp_path):
+    env = run_list_reels("h", config=_config(tmp_path), count=-1,
+                         store=Store(tmp_path), now=lambda: NOW)
     assert "must be non-negative" in env["error"]
-
-
-# --- T2.9 header provenance -------------------------------------------------
-
-def test_x_ig_app_id_on_every_api_call(tmp_path):
-    config = _config(tmp_path, scan_depth=4)
-    client, t = _client([
-        _profile(),
-        _page([_clip(1006, "a"), _clip(1005, "b")], more=False, next_id=None),
-    ])
-    run_list_reels("natgeo", config=config, client=client)
-    assert t.calls                                     # calls were made
-    for call in t.calls:
-        assert call["headers"].get("x-ig-app-id") == IG_APP_ID
-        # orchestrator sets NO auth headers itself
-        assert "authorization" not in {k.lower() for k in call["headers"]}
+    assert env["error_kind"] == "invalid_params"

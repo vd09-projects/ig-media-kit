@@ -10,14 +10,16 @@ mp4s via the T3 downloader, and POSTs the aggregated result to a callback URL
 with a bounded, SSRF-guarded retry. ``run_get_batch_status`` is a pure read.
 ``resume_pending_jobs`` re-adopts orphaned jobs from checkpoint after a restart.
 
-Built on MODIFICATION-FREE reuse of shipped T2/T3 code:
-  * ``list_reels.run_list_reels`` — one paced, never-sleeping page-budget unit of
-    call-driven fill (top-check + deepen, capped at ``max_pages_per_call``,
-    ranked partial on stop_signal). The batch LOOPS it under the ``FetchGate``,
-    sleeping between units on a metered stop; T5 will wrap this same entrypoint
-    at the same gate. Completion is the envelope's ``coverage.complete``
-    (contiguity — a single segment reaching scan_depth OR the account's real
-    end), NEVER a raw pool count.
+Built on reuse of the shipped T2/T3 fetch + store code:
+  * ``fill.run_fill`` — one paced, never-sleeping page-budget unit of call-driven
+    fill (top-check + deepen, capped at ``max_pages_per_call``, ranked partial on
+    stop_signal). This is the command-side fetch primitive extracted from the old
+    ``run_list_reels`` when ``list_reels`` became a read-only query (T17 CQRS
+    split); the batch runner is the only writer that advances coverage, so it owns
+    the metered primitive. The batch LOOPS it under the ``FetchGate``, sleeping
+    between units on a metered stop. Completion is the envelope's
+    ``coverage.complete`` (contiguity — a single segment reaching scan_depth OR
+    the account's real end), NEVER a raw pool count.
   * ``ranking`` — ``load_pool`` / ``filter_pool`` / ``rank`` / ``select_top`` over
     the full deduped manifest (aggregation is order-safe by construction; the
     store already holds the per-shortcode dedupe + monotonic media_id watermark).
@@ -46,8 +48,8 @@ from urllib.parse import urlparse
 from . import ranking
 from .config import Config
 from .fetch_gate import FetchGate, get_gate
+from .fill import run_fill
 from .http_client import STOP_SIGNAL_REASONS, AnonymousClient
-from .list_reels import run_list_reels
 from .download import run_download_reel
 from .ranking import InvalidSortKey
 from .store import Store
@@ -244,16 +246,22 @@ def reset_batch_state() -> None:
 def _fill_handle(job: BatchJob, handle: str, *, deps: BatchDeps,
                  client: AnonymousClient, checkpoint: Callable[[], None]) -> None:
     """Fill one handle toward contiguity, one gate-gated page-budget unit at a
-    time, sleeping out cooldowns between units. Reuses ``run_list_reels`` (which
+    time, sleeping out cooldowns between units. Reuses ``fill.run_fill`` (which
     never sleeps and is capped at ``max_pages_per_call``) as the per-unit
     primitive; the gate + this loop own the serialization and the sleeping.
 
-    # TODO: reconcile the batch per-unit primitive with window.run_window in
-    # batch._fill_handle; the T4 plan named run_window as the per-window call, but
-    # run_window is TOP_SCAN-only (no deepen, no cursor resume toward scan_depth),
-    # so this loops run_list_reels (top-check + deepen + cursor resume, the same
-    # entrypoint T5 wraps at the gate) instead. run_window is now unreferenced —
-    # either retire it or route the batch through it once it can deepen, to avoid
+    ``run_fill`` is the command-side fetch unit extracted from the old
+    ``run_list_reels`` when ``list_reels`` became read-only (T17 CQRS split): the
+    batch runner is the only writer that advances coverage toward scan_depth, so
+    it owns the metered primitive. The envelope contract read below
+    (``error`` / ``coverage.complete`` / ``stop_reason`` / ``partial`` /
+    ``pages_fetched``) is unchanged from the pre-split compose.
+
+    # TODO: reconcile the batch per-unit primitive with window.run_window; the T4
+    # plan named run_window as the per-window call, but run_window is TOP_SCAN-only
+    # (no deepen, no cursor resume toward scan_depth), so this loops run_fill
+    # (top-check + deepen + cursor resume) instead. run_window is now unreferenced
+    # — either retire it or route the batch through it once it can deepen, to avoid
     # two divergent compose paths."""
     store = deps.store
     gate = deps.gate
@@ -272,12 +280,11 @@ def _fill_handle(job: BatchJob, handle: str, *, deps: BatchDeps,
     while hp.pages_spent < budget:
         before = store.count_reels(handle)
         with gate.acquire():
-            env = run_list_reels(
+            env = run_fill(
                 handle,
                 config=config,
                 client=client,
                 store=store,
-                fresh_fetch=False,
                 min_views=filters.get("min_views"),
                 min_duration=filters.get("min_duration"),
                 max_age_days=filters.get("max_age_days"),

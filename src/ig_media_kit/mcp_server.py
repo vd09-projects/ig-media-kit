@@ -150,23 +150,23 @@ def list_reels(
     min_duration: float | None = None,
     max_age_days: int | None = None,
     scan_depth: int | None = None,
-    fresh_fetch: bool = False,
     config_path: str | None = None,
 ) -> dict[str, Any]:
-    """Return a public IG handle's top reels, ranked, filling the store as it goes.
+    """Return a public IG handle's top reels, ranked, READ-ONLY over the store.
 
-    Discovers reels anonymously (no login), accumulating the pool call-by-call
-    toward ``scan_depth`` and returning the top ``count`` ranked by ``sort_by``
-    (``play_count`` | ``like_count`` | ``comment_count`` | ``taken_at``, desc).
-    Filters: ``min_views`` (play_count), ``min_duration`` (seconds),
+    Ranks the ALREADY-STORED reels for ``handle`` and returns the top ``count`` by
+    ``sort_by`` (``play_count`` | ``like_count`` | ``comment_count`` | ``taken_at``,
+    desc). Filters: ``min_views`` (play_count), ``min_duration`` (seconds),
     ``max_age_days``. Unset args fall back to the config ``top_reels`` defaults.
 
-    Fast + NEVER-BLOCKING: synchronous, never sleeps, spends at most
-    ``max_pages_per_call`` feed pages across its top-check + deepen phases, and
-    returns a ranked PARTIAL with a "budget cooling" note on the first IG
-    rate-limit rather than blocking. ``fresh_fetch=true`` forces a top-check even
-    when coverage is already complete; ``fresh_fetch=false`` (default) serves
-    straight from the store with ZERO network once coverage is contiguous+deep.
+    NEVER hits Instagram on any path — no fetch, no login, no sleep (analyze first
+    with ``start_batch_fetch``). A handle that has NOT been analyzed yet comes back
+    as a typed error (``error_kind="not_analyzed"``, ``retryable=false``) whose
+    ``note`` says to run ``start_batch_fetch`` first. An analyzed handle serves
+    instantly from the store plus a ``staleness`` block (``last_analyzed_at``,
+    ``store_count`` vs ``scan_depth_target`` as an informational depth hint, and
+    ``signed_url_maybe_expired`` over the served rows). ``coverage.complete``
+    reports whether the stored coverage is contiguous to depth.
 
     NEVER raises to the client — any failure comes back as a typed envelope with a
     ``note`` and an ``error`` marker."""
@@ -176,7 +176,7 @@ def list_reels(
             handle, config=ctx.config, store=ctx.store,
             count=count, sort_by=sort_by, min_views=min_views,
             min_duration=min_duration, max_age_days=max_age_days,
-            scan_depth=scan_depth, fresh_fetch=fresh_fetch,
+            scan_depth=scan_depth,
         )
     except Exception as exc:  # noqa: BLE001 — the tool must never throw.
         return {
@@ -185,6 +185,7 @@ def list_reels(
             "coverage": {"complete": False, "segments": 0, "pool_depth": 0},
             "pages_fetched": 0, "stop_reason": None,
             "note": f"list_reels failed: {exc}", "error": str(exc),
+            "error_kind": "internal_error", "retryable": False,
         }
 
 

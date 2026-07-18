@@ -23,6 +23,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
@@ -68,13 +69,23 @@ class State:
     the store has actually covered. Normally ONE segment (top -> deep_cursor); a
     burst of >1 window of genuinely-newer posts can open a 2nd, which deepen
     later bridges + merges. It is a list of plain dicts so it round-trips through
-    YAML without custom tags."""
+    YAML without custom tags.
+
+    ``last_analyzed_at`` (T17, additive) is the epoch time of the LAST fetch
+    window that persisted for this handle — i.e. the last time analysis actually
+    touched the store, stamped by ``write_window``. It is semantically distinct
+    from a CSV row's per-row ``fetched_at`` (which is URL-resolve time for one
+    reel): it survives an empty-but-attempted window and records *analysis* time.
+    The read-only ``list_reels`` query surfaces it as staleness metadata; it is
+    NEVER a readiness gate. Old state YAMLs without the key load as ``None``
+    (backward-compatible)."""
 
     user_id: str | None = None
     high_water_media_id: int | None = None   # numeric pk of newest reel ingested
     deep_cursor: str | None = None           # next_max_id toward scan_depth
     last_stop_reason: str | None = None
     coverage_segments: list[dict] = field(default_factory=list)
+    last_analyzed_at: int | None = None      # epoch of last window that persisted
 
 
 @dataclass
@@ -112,6 +123,8 @@ class Store:
             deep_cursor=data.get("deep_cursor"),
             last_stop_reason=data.get("last_stop_reason"),
             coverage_segments=[dict(s) for s in segments if isinstance(s, dict)],
+            # Absent in pre-T17 state YAMLs -> None (backward-compatible default).
+            last_analyzed_at=_as_int(data.get("last_analyzed_at")),
         )
 
     def load_seen(self, handle: str) -> set[str]:
@@ -234,9 +247,15 @@ class Store:
         next_cursor: str | None = None,
         stop_reason: str | None = None,
         mode: FetchMode = FetchMode.TOP_SCAN,
+        now: Callable[[], int] = lambda: int(time.time()),
         _after_csv_hook: Callable[[], None] | None = None,
     ) -> WriteResult:
         """Persist a window durable-first. Returns what was actually persisted.
+
+        Stamps ``last_analyzed_at`` = ``now()`` on EVERY window persist (T17) —
+        even a zero-row window — so it records the last time analysis touched the
+        store (the source for ``list_reels``' staleness metadata). This is the one
+        writer of that field; the read-only query only reads it.
 
         ``_after_csv_hook`` is a test-only seam fired AFTER the CSV fsync and
         BEFORE the state write, to prove that an interruption there leaves the
@@ -272,6 +291,9 @@ class Store:
                 state.deep_cursor = next_cursor
         if stop_reason is not None:
             state.last_stop_reason = stop_reason
+        # Record analysis time: every window persist advances it, incl. an empty
+        # window (an attempted-but-0-row analysis still "touched" the store).
+        state.last_analyzed_at = now()
 
         # (c) atomic state write.
         self._write_state_atomic(handle, state)
@@ -395,6 +417,7 @@ class Store:
             "deep_cursor": state.deep_cursor,
             "last_stop_reason": state.last_stop_reason,
             "coverage_segments": [dict(s) for s in state.coverage_segments],
+            "last_analyzed_at": state.last_analyzed_at,
         }
         tmp = path.with_suffix(path.suffix + ".tmp")
         with tmp.open("w", encoding="utf-8") as fh:

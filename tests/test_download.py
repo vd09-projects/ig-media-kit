@@ -288,6 +288,9 @@ def test_reresolve_stop_signal_returns_partial(tmp_path):
     assert "budget cooling" in env["note"]
     assert env["local_mp4"] is None
     assert len(t.calls) == 1                          # one feed page, then STOP
+    # T17 uniform error contract: a metered cooldown is the RETRYABLE sibling.
+    assert env["error_kind"] == "rate_limited"
+    assert env["retryable"] is True
 
 
 def test_reresolve_not_found_in_budget_returns_typed_error(tmp_path):
@@ -307,6 +310,10 @@ def test_reresolve_not_found_in_budget_returns_typed_error(tmp_path):
     assert env["partial"] is False
     assert "could not re-resolve" in env["error"]
     assert env["local_mp4"] is None
+    # T17 uniform error contract: aged-out is a non-retryable typed error, carrying
+    # the same error_kind/retryable pair list_reels' errors do (deliberate change).
+    assert env["error_kind"] == "aged_out"
+    assert env["retryable"] is False
 
 
 # --- T3.1 unknown shortcode -> typed error ----------------------------------
@@ -320,6 +327,8 @@ def test_unknown_shortcode_typed_error_no_network(tmp_path):
     assert env["handle"] is None
     assert "not in store" in env["error"]
     assert env["local_mp4"] is None
+    assert env["error_kind"] == "not_in_store"
+    assert env["retryable"] is False
 
 
 # --- T3.5 ftyp-verify rejects 0-byte / 302-shaped bodies --------------------
